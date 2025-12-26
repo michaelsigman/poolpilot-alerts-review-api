@@ -17,9 +17,6 @@ const PROJECT_ID = "poolpilot-analytics";
 
 // -----------------------------
 // BigQuery client
-// Uses:
-// - ADC locally (gcloud auth application-default login)
-// - Service account on Render (later)
 // -----------------------------
 const bigquery = new BigQuery({
   projectId: PROJECT_ID,
@@ -35,9 +32,6 @@ function escapeString(value) {
 
 // -----------------------------
 // Health check
-// Confirms:
-// - BigQuery auth
-// - Project + dataset access
 // -----------------------------
 app.get("/health", async (req, res) => {
   try {
@@ -63,7 +57,7 @@ app.get("/health", async (req, res) => {
 
 // -----------------------------
 // GET /cases
-// Review queue for alert cases
+// Review queue
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
@@ -102,6 +96,58 @@ app.get("/cases", async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error("❌ GET /cases failed:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------
+// ✅ GET /cases/:case_id
+// Single case detail
+// -----------------------------
+app.get("/cases/:case_id", async (req, res) => {
+  const { case_id } = req.params;
+
+  try {
+    const query = `
+      SELECT
+        case_id,
+        agency_name,
+        system_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        alert_count,
+
+        start_spa_temp,
+        last_spa_temp,
+        start_pool_temp,
+        last_pool_temp,
+
+        expected_behavior,
+        suppress_until,
+        human_verdict,
+
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      WHERE case_id = @case_id
+      LIMIT 1
+    `;
+
+    const [rows] = await bigquery.query({
+      query,
+      params: { case_id },
+    });
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({
+        error: "Case not found",
+      });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("❌ GET /cases/:case_id failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
