@@ -57,19 +57,21 @@ app.get("/health", async (req, res) => {
 
 // -----------------------------
 // GET /cases
-// Open + observing cases
+// Returns ALL cases (open + resolved)
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
     const query = `
       SELECT
         case_id,
+        system_id,
         agency_name,
         system_name,
         body_type,
         issue_type,
         status,
         opened_at,
+        resolved_at,
         alert_count,
 
         start_pool_temp,
@@ -81,10 +83,13 @@ app.get("/cases", async (req, res) => {
         suppress_until,
         human_verdict,
 
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
+        TIMESTAMP_DIFF(
+          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
+          opened_at,
+          MINUTE
+        ) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status IN ('open', 'observing')
-      ORDER BY opened_at ASC
+      ORDER BY opened_at DESC
     `;
 
     const [rows] = await bigquery.query({ query });
@@ -97,14 +102,39 @@ app.get("/cases", async (req, res) => {
 
 // -----------------------------
 // GET /cases/:case_id
-// Case detail
+// Single case detail
 // -----------------------------
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
 
   try {
     const query = `
-      SELECT *
+      SELECT
+        case_id,
+        system_id,
+        agency_name,
+        system_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        resolved_at,
+        alert_count,
+
+        start_pool_temp,
+        last_pool_temp,
+        start_spa_temp,
+        last_spa_temp,
+
+        expected_behavior,
+        suppress_until,
+        human_verdict,
+
+        TIMESTAMP_DIFF(
+          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
+          opened_at,
+          MINUTE
+        ) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -128,18 +158,15 @@ app.get("/cases/:case_id", async (req, res) => {
 
 // -----------------------------
 // ✅ GET /cases/:case_id/snapshots
-// FIXED VERSION (NO COALESCE BUG)
+// THIS IS THE MISSING PIECE
 // -----------------------------
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
   try {
-    // 1️⃣ Load case metadata
+    // 1️⃣ Get system_id + opened_at for the case
     const caseQuery = `
-      SELECT
-        system_id,
-        opened_at,
-        first_alert_snapshot_ts
+      SELECT system_id, opened_at
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -154,50 +181,37 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
       return res.status(404).json({ error: "Case not found" });
     }
 
-    const {
-      system_id,
-      opened_at,
-      first_alert_snapshot_ts,
-    } = caseRows[0];
+    const { system_id, opened_at } = caseRows[0];
 
-    // 2️⃣ Decide snapshot start time in JS (important)
-    const startTs = first_alert_snapshot_ts || opened_at;
-
-    // 3️⃣ Query snapshots
-    const snapshotQuery = `
+    // 2️⃣ Fetch snapshots since case opened
+    const snapshotsQuery = `
       SELECT
         snapshot_ts,
         pool_temp,
         spa_temp,
+        air_temp,
         set_point_pool,
         set_point_spa,
-        pool_heater,
-        spa_heater,
         filter_pump,
         spa_pump,
+        pool_heater,
+        spa_heater,
         service_mode
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
       WHERE system_id = @system_id
-        AND snapshot_ts >= @start_ts
+        AND snapshot_ts >= @opened_at
       ORDER BY snapshot_ts ASC
-      LIMIT 300
     `;
 
     const [snapshots] = await bigquery.query({
-      query: snapshotQuery,
+      query: snapshotsQuery,
       params: {
         system_id,
-        start_ts: startTs,
+        opened_at,
       },
     });
 
-    res.json({
-      case_id,
-      system_id,
-      start_ts,
-      snapshot_count: snapshots.length,
-      snapshots,
-    });
+    res.json(snapshots);
   } catch (err) {
     console.error("❌ GET /cases/:case_id/snapshots failed:", err);
     res.status(500).json({ error: err.message });
@@ -206,7 +220,7 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
 // -----------------------------
 // POST /cases/:case_id/feedback
-// Human-in-the-loop updates
+// Human-in-the-loop updates ONLY
 // -----------------------------
 app.post("/cases/:case_id/feedback", async (req, res) => {
   const { case_id } = req.params;
@@ -252,9 +266,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   updates.push(`updated_at = CURRENT_TIMESTAMP()`);
 
   if (!updates.length) {
-    return res.status(400).json({
-      error: "No valid fields provided",
-    });
+    return res.status(400).json({ error: "No fields to update" });
   }
 
   const query = `

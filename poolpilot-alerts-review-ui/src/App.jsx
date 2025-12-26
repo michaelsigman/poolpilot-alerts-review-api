@@ -1,58 +1,63 @@
-import { Routes, Route, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { Routes, Route, useNavigate } from "react-router-dom";
 import CaseDetail from "./CaseDetail";
-import "./App.css";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
 export default function App() {
   const [cases, setCases] = useState([]);
-  const [counts, setCounts] = useState({ open_count: 0, resolved_count: 0 });
-  const [activeTab, setActiveTab] = useState("open");
+  const [tab, setTab] = useState("open");
   const navigate = useNavigate();
 
-  // Load counts once
   useEffect(() => {
-    fetch(`${API_BASE}/cases/counts`)
-      .then(res => res.json())
-      .then(setCounts)
-      .catch(console.error);
+    loadCases();
   }, []);
 
-  // Load cases by tab
-  useEffect(() => {
-    fetch(`${API_BASE}/cases?status=${activeTab}`)
-      .then(res => res.json())
-      .then(setCases)
-      .catch(console.error);
-  }, [activeTab]);
+  async function loadCases() {
+    const res = await fetch(`${API_BASE}/cases`);
+    const data = await res.json();
+    setCases(data);
+  }
+
+  const openCases = cases.filter(
+    (c) => c.status === "open" || c.status === "observing"
+  );
+
+  const resolvedCases = cases.filter(
+    (c) => c.status === "resolved"
+  );
 
   return (
     <Routes>
       <Route
         path="/"
         element={
-          <div className="container">
+          <div style={{ padding: 20 }}>
             <h1>PoolPilot – Alert Review</h1>
 
             {/* Tabs */}
-            <div className="tabs">
+            <div style={{ marginBottom: 20 }}>
               <button
-                className={activeTab === "open" ? "active" : ""}
-                onClick={() => setActiveTab("open")}
+                onClick={() => setTab("open")}
+                style={{ marginRight: 10 }}
               >
-                Open Cases ({counts.open_count})
+                Open Cases ({openCases.length})
               </button>
-              <button
-                className={activeTab === "resolved" ? "active" : ""}
-                onClick={() => setActiveTab("resolved")}
-              >
-                Resolved Cases ({counts.resolved_count})
+
+              <button onClick={() => setTab("resolved")}>
+                Resolved Cases ({resolvedCases.length})
               </button>
             </div>
 
-            {/* Table */}
-            <table>
+            {/* Cases Table */}
+            <table
+              border="1"
+              cellPadding="6"
+              style={{
+                borderCollapse: "collapse",
+                width: "100%",
+              }}
+            >
               <thead>
                 <tr>
                   <th>System</th>
@@ -62,12 +67,13 @@ export default function App() {
                   <th>Minutes Open</th>
                 </tr>
               </thead>
+
               <tbody>
-                {cases.map(c => (
+                {(tab === "open" ? openCases : resolvedCases).map((c) => (
                   <tr
                     key={c.case_id}
                     onClick={() => navigate(`/cases/${c.case_id}`)}
-                    className="clickable"
+                    style={{ cursor: "pointer" }}
                   >
                     <td>{c.system_name}</td>
                     <td>{c.body_type}</td>
@@ -82,7 +88,7 @@ export default function App() {
         }
       />
 
-      <Route path="/cases/:case_id" element={<CaseDetail />} />
+      <Route path="/cases/:caseId" element={<CaseDetail />} />
     </Routes>
   );
 }
