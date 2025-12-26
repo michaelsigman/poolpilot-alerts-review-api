@@ -53,31 +53,9 @@ app.get("/health", async (req, res) => {
 });
 
 // -----------------------------
-// ✅ GET /cases/counts
-// -----------------------------
-app.get("/cases/counts", async (req, res) => {
-  try {
-    const query = `
-      SELECT
-        COUNTIF(status = 'open')     AS open_count,
-        COUNTIF(status = 'resolved') AS resolved_count
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-    `;
-
-    const [rows] = await bigquery.query({ query });
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("❌ GET /cases/counts failed:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -----------------------------
-// GET /cases?status=open|resolved
+// GET /cases (open + observing)
 // -----------------------------
 app.get("/cases", async (req, res) => {
-  const status = req.query.status || "open";
-
   try {
     const query = `
       SELECT
@@ -89,27 +67,20 @@ app.get("/cases", async (req, res) => {
         status,
         opened_at,
         alert_count,
-
-        start_spa_temp,
-        last_spa_temp,
         start_pool_temp,
         last_pool_temp,
-
+        start_spa_temp,
+        last_spa_temp,
+        human_verdict,
         expected_behavior,
         suppress_until,
-        human_verdict,
-
         TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status = @status
+      WHERE status IN ('open', 'observing')
       ORDER BY opened_at ASC
     `;
 
-    const [rows] = await bigquery.query({
-      query,
-      params: { status },
-    });
-
+    const [rows] = await bigquery.query({ query });
     res.json(rows);
   } catch (err) {
     console.error("❌ GET /cases failed:", err);
@@ -118,7 +89,7 @@ app.get("/cases", async (req, res) => {
 });
 
 // -----------------------------
-// GET /cases/:case_id
+// GET /cases/:case_id (detail)
 // -----------------------------
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
@@ -126,25 +97,7 @@ app.get("/cases/:case_id", async (req, res) => {
   try {
     const query = `
       SELECT
-        case_id,
-        agency_name,
-        system_name,
-        body_type,
-        issue_type,
-        status,
-        opened_at,
-        alert_count,
-
-        start_spa_temp,
-        last_spa_temp,
-        start_pool_temp,
-        last_pool_temp,
-
-        expected_behavior,
-        suppress_until,
-        human_verdict,
-
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
+        *
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -162,6 +115,72 @@ app.get("/cases/:case_id", async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     console.error("❌ GET /cases/:case_id failed:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------
+// ✅ GET /cases/:case_id/snapshots
+// -----------------------------
+app.get("/cases/:case_id/snapshots", async (req, res) => {
+  const { case_id } = req.params;
+
+  try {
+    // 1️⃣ Get case metadata
+    const caseQuery = `
+      SELECT
+        system_id,
+        body_type,
+        opened_at
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      WHERE case_id = @case_id
+      LIMIT 1
+    `;
+
+    const [caseRows] = await bigquery.query({
+      query: caseQuery,
+      params: { case_id },
+    });
+
+    if (!caseRows.length) {
+      return res.status(404).json({ error: "Case not found" });
+    }
+
+    const { system_id, body_type, opened_at } = caseRows[0];
+
+    // 2️⃣ Pull snapshots
+    const snapshotQuery = `
+      SELECT
+        snapshot_ts,
+        pool_temp,
+        spa_temp,
+        set_point_pool,
+        set_point_spa,
+        pool_heater,
+        spa_heater,
+        filter_pump,
+        spa_pump,
+        service_mode
+      FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
+      WHERE system_id = @system_id
+        AND snapshot_ts >= @opened_at
+      ORDER BY snapshot_ts ASC
+      LIMIT 200
+    `;
+
+    const [snapshots] = await bigquery.query({
+      query: snapshotQuery,
+      params: { system_id, opened_at },
+    });
+
+    res.json({
+      case_id,
+      body_type,
+      snapshot_count: snapshots.length,
+      snapshots,
+    });
+  } catch (err) {
+    console.error("❌ GET /cases/:case_id/snapshots failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -202,9 +221,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (resolution_reason) {
-    updates.push(
-      `resolution_reason = '${escapeString(resolution_reason)}'`
-    );
+    updates.push(`resolution_reason = '${escapeString(resolution_reason)}'`);
   }
 
   updates.push(`last_updated = CURRENT_TIMESTAMP()`);
@@ -216,15 +233,12 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
     WHERE case_id = @case_id
   `;
 
-  try {
-    await bigquery.query({ query, params: { case_id } });
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ POST /cases/:case_id/feedback failed:", err);
-    res.status(500).json({ error: err.message });
-  }
+  await bigquery.query({ query, params: { case_id } });
+  res.json({ success: true });
 });
 
+// -----------------------------
+// Start server
 // -----------------------------
 app.listen(PORT, () => {
   console.log(`🚀 Alerts Review API running on port ${PORT}`);
