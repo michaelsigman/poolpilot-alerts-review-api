@@ -56,8 +56,7 @@ app.get("/health", async (req, res) => {
 });
 
 // -----------------------------
-// GET /cases
-// Returns ALL cases (open + resolved)
+// GET /cases (open + resolved)
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
@@ -79,10 +78,6 @@ app.get("/cases", async (req, res) => {
         start_spa_temp,
         last_spa_temp,
 
-        expected_behavior,
-        suppress_until,
-        human_verdict,
-
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
@@ -102,39 +97,13 @@ app.get("/cases", async (req, res) => {
 
 // -----------------------------
 // GET /cases/:case_id
-// Single case detail
 // -----------------------------
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
 
   try {
     const query = `
-      SELECT
-        case_id,
-        system_id,
-        agency_name,
-        system_name,
-        body_type,
-        issue_type,
-        status,
-        opened_at,
-        resolved_at,
-        alert_count,
-
-        start_pool_temp,
-        last_pool_temp,
-        start_spa_temp,
-        last_spa_temp,
-
-        expected_behavior,
-        suppress_until,
-        human_verdict,
-
-        TIMESTAMP_DIFF(
-          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
-          opened_at,
-          MINUTE
-        ) AS minutes_open
+      SELECT *
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -158,15 +127,17 @@ app.get("/cases/:case_id", async (req, res) => {
 
 // -----------------------------
 // ✅ GET /cases/:case_id/snapshots
-// THIS IS THE MISSING PIECE
+// HARDENED VERSION (FIXED)
 // -----------------------------
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
   try {
-    // 1️⃣ Get system_id + opened_at for the case
+    // 1️⃣ Fetch case context
     const caseQuery = `
-      SELECT system_id, opened_at
+      SELECT
+        CAST(system_id AS STRING) AS system_id,
+        opened_at
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -183,7 +154,7 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
     const { system_id, opened_at } = caseRows[0];
 
-    // 2️⃣ Fetch snapshots since case opened
+    // 2️⃣ Fetch snapshots (CAST BOTH SIDES)
     const snapshotsQuery = `
       SELECT
         snapshot_ts,
@@ -198,7 +169,7 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
         spa_heater,
         service_mode
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
-      WHERE system_id = @system_id
+      WHERE CAST(system_id AS STRING) = @system_id
         AND snapshot_ts >= @opened_at
       ORDER BY snapshot_ts ASC
     `;
@@ -220,7 +191,6 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
 // -----------------------------
 // POST /cases/:case_id/feedback
-// Human-in-the-loop updates ONLY
 // -----------------------------
 app.post("/cases/:case_id/feedback", async (req, res) => {
   const { case_id } = req.params;
@@ -243,9 +213,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (suppression_reason) {
-    updates.push(
-      `suppression_reason = '${escapeString(suppression_reason)}'`
-    );
+    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
   }
 
   if (suppress_hours) {
@@ -257,9 +225,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (resolution_reason) {
-    updates.push(
-      `resolution_reason = '${escapeString(resolution_reason)}'`
-    );
+    updates.push(`resolution_reason = '${escapeString(resolution_reason)}'`);
   }
 
   updates.push(`last_updated = CURRENT_TIMESTAMP()`);
