@@ -48,18 +48,36 @@ app.get("/health", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Health check failed:", err);
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 // -----------------------------
-// GET /cases
-// Review queue (open cases)
+// ✅ GET /cases/counts
+// -----------------------------
+app.get("/cases/counts", async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        COUNTIF(status = 'open')     AS open_count,
+        COUNTIF(status = 'resolved') AS resolved_count
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+    `;
+
+    const [rows] = await bigquery.query({ query });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("❌ GET /cases/counts failed:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------
+// GET /cases?status=open|resolved
 // -----------------------------
 app.get("/cases", async (req, res) => {
+  const status = req.query.status || "open";
+
   try {
     const query = `
       SELECT
@@ -83,16 +101,15 @@ app.get("/cases", async (req, res) => {
 
         TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status IN ('open', 'observing')
-        AND (
-          expected_behavior IS DISTINCT FROM TRUE
-          OR suppress_until IS NULL
-          OR suppress_until <= CURRENT_TIMESTAMP()
-        )
+      WHERE status = @status
       ORDER BY opened_at ASC
     `;
 
-    const [rows] = await bigquery.query({ query });
+    const [rows] = await bigquery.query({
+      query,
+      params: { status },
+    });
+
     res.json(rows);
   } catch (err) {
     console.error("❌ GET /cases failed:", err);
@@ -102,14 +119,32 @@ app.get("/cases", async (req, res) => {
 
 // -----------------------------
 // GET /cases/:case_id
-// Single case detail
 // -----------------------------
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
 
   try {
     const query = `
-      SELECT *
+      SELECT
+        case_id,
+        agency_name,
+        system_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        alert_count,
+
+        start_spa_temp,
+        last_spa_temp,
+        start_pool_temp,
+        last_pool_temp,
+
+        expected_behavior,
+        suppress_until,
+        human_verdict,
+
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -120,7 +155,7 @@ app.get("/cases/:case_id", async (req, res) => {
       params: { case_id },
     });
 
-    if (!rows || rows.length === 0) {
+    if (!rows.length) {
       return res.status(404).json({ error: "Case not found" });
     }
 
@@ -132,76 +167,7 @@ app.get("/cases/:case_id", async (req, res) => {
 });
 
 // -----------------------------
-// ✅ NEW: GET /cases/:case_id/snapshots
-// Snapshot timeline for analysis
-// -----------------------------
-app.get("/cases/:case_id/snapshots", async (req, res) => {
-  const { case_id } = req.params;
-
-  try {
-    // 1️⃣ Load case to get system_id + opened_at
-    const caseQuery = `
-      SELECT system_id, body_type, opened_at
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE case_id = @case_id
-      LIMIT 1
-    `;
-
-    const [caseRows] = await bigquery.query({
-      query: caseQuery,
-      params: { case_id },
-    });
-
-    if (!caseRows || caseRows.length === 0) {
-      return res.status(404).json({ error: "Case not found" });
-    }
-
-    const { system_id, body_type, opened_at } = caseRows[0];
-
-    // 2️⃣ Load snapshots from opened_at onward
-    const snapshotQuery = `
-      SELECT
-        snapshot_ts,
-        pool_temp,
-        spa_temp,
-        air_temp,
-        set_point_pool,
-        set_point_spa,
-        filter_pump,
-        spa_pump,
-        pool_heater,
-        spa_heater,
-        service_mode
-      FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
-      WHERE system_id = @system_id
-        AND snapshot_ts >= @opened_at
-      ORDER BY snapshot_ts ASC
-      LIMIT 200
-    `;
-
-    const [snapshots] = await bigquery.query({
-      query: snapshotQuery,
-      params: {
-        system_id,
-        opened_at,
-      },
-    });
-
-    res.json({
-      case_id,
-      system_id,
-      body_type,
-      snapshots,
-    });
-  } catch (err) {
-    console.error("❌ GET /cases/:case_id/snapshots failed:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -----------------------------
 // POST /cases/:case_id/feedback
-// Human-in-the-loop updates ONLY
 // -----------------------------
 app.post("/cases/:case_id/feedback", async (req, res) => {
   const { case_id } = req.params;
@@ -224,9 +190,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (suppression_reason) {
-    updates.push(
-      `suppression_reason = '${escapeString(suppression_reason)}'`
-    );
+    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
   }
 
   if (suppress_hours) {
@@ -246,10 +210,6 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   updates.push(`last_updated = CURRENT_TIMESTAMP()`);
   updates.push(`updated_at = CURRENT_TIMESTAMP()`);
 
-  if (updates.length === 0) {
-    return res.status(400).json({ error: "No valid fields provided to update" });
-  }
-
   const query = `
     UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
     SET ${updates.join(", ")}
@@ -257,11 +217,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   `;
 
   try {
-    await bigquery.query({
-      query,
-      params: { case_id },
-    });
-
+    await bigquery.query({ query, params: { case_id } });
     res.json({ success: true });
   } catch (err) {
     console.error("❌ POST /cases/:case_id/feedback failed:", err);
@@ -269,8 +225,6 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 });
 
-// -----------------------------
-// Start server
 // -----------------------------
 app.listen(PORT, () => {
   console.log(`🚀 Alerts Review API running on port ${PORT}`);
