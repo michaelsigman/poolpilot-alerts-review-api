@@ -1,151 +1,158 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
-export default function CaseDetail() {
-  const { caseId } = useParams();
-  const navigate = useNavigate();
+function heaterLabel(value) {
+  if (value === 1) return "ON";
+  if (value === 3) return "STANDBY";
+  return "OFF";
+}
 
+function unwrap(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "object" && "value" in v) return v.value;
+  return v;
+}
+
+function formatDateTime(v) {
+  const raw = unwrap(v);
+  if (!raw) return "";
+
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) return raw;
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+export default function CaseDetail({ caseId, onBack }) {
   const [caseData, setCaseData] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadCase() {
+    async function load() {
       try {
         const caseRes = await fetch(`${API_BASE}/cases/${caseId}`);
         const caseJson = await caseRes.json();
-
-        if (!caseRes.ok || caseJson.error) {
-          throw new Error(caseJson?.error || "Case not found");
-        }
-
-        setCaseData(caseJson);
 
         const snapRes = await fetch(
           `${API_BASE}/cases/${caseId}/snapshots`
         );
         const snapJson = await snapRes.json();
 
-        setSnapshots(Array.isArray(snapJson) ? snapJson : []);
+        if (!Array.isArray(snapJson)) {
+          throw new Error("Snapshots response is not an array");
+        }
+
+        setCaseData(caseJson);
+        setSnapshots(snapJson);
+        setLoading(false);
       } catch (err) {
+        console.error("Failed to load case detail", err);
         setError(err.message);
-      } finally {
         setLoading(false);
       }
     }
 
-    loadCase();
+    load();
   }, [caseId]);
 
-  if (loading) return <div style={{ padding: 20 }}>Loading case…</div>;
-  if (error) return <div style={{ padding: 20, color: "red" }}>Error: {error}</div>;
-  if (!caseData) return <div style={{ padding: 20 }}>Case not available.</div>;
+  if (loading) return <p>Loading case…</p>;
+
+  if (error) {
+    return (
+      <div className="case-detail">
+        <button onClick={onBack}>← Back to cases</button>
+        <p style={{ color: "red" }}>
+          <b>Error:</b> {error}
+        </p>
+      </div>
+    );
+  }
+
+  if (!caseData) return <p>Case not found</p>;
 
   const isSpa = caseData.body_type === "spa";
-  const isPool = caseData.body_type === "pool";
 
   return (
-    <div style={{ padding: 20 }}>
-      <button onClick={() => navigate("/")}>← Back to cases</button>
+    <div className="case-detail">
+      <button onClick={onBack}>← Back to cases</button>
 
-      <h2 style={{ marginTop: 10 }}>{caseData.system_name}</h2>
+      {/* ===== Case Header ===== */}
+      <h2>{caseData.system_name}</h2>
 
-      <p><strong>Issue:</strong> {caseData.issue_type}</p>
-      <p><strong>Status:</strong> {caseData.status}</p>
-      <p><strong>Minutes Open:</strong> {caseData.minutes_open}</p>
+      <div style={{ marginBottom: "12px" }}>
+        <p>
+          <b>Agency:</b>{" "}
+          {caseData.agency_name || <i>Unknown</i>}
+        </p>
+        <p><b>Issue:</b> {caseData.issue_type}</p>
+        <p><b>Status:</b> {caseData.status}</p>
+        <p><b>Minutes Open:</b> {caseData.minutes_open}</p>
+      </div>
 
-      {/* ----------------------- */}
-      {/* Temperature Comparison */}
-      {/* ----------------------- */}
-      <h3>Temperature Comparison</h3>
-      <table border="1" cellPadding="6">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Start</th>
-            <th>Current</th>
-          </tr>
-        </thead>
-        <tbody>
-          {isPool && (
-            <tr>
-              <td>Pool</td>
-              <td>{caseData.start_pool_temp ?? "—"}°F</td>
-              <td>{caseData.last_pool_temp ?? "—"}°F</td>
-            </tr>
-          )}
-          {isSpa && (
-            <tr>
-              <td>Spa</td>
-              <td>{caseData.start_spa_temp ?? "—"}°F</td>
-              <td>{caseData.last_spa_temp ?? "—"}°F</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <h3>Snapshots ({snapshots.length})</h3>
 
-      {/* ----------------------- */}
-      {/* Snapshot Timeline */}
-      {/* ----------------------- */}
-      <h3 style={{ marginTop: 30 }}>
-        Snapshots ({snapshots.length})
-      </h3>
+      {snapshots.length === 0 && <p>No snapshots found.</p>}
 
-      {snapshots.length === 0 ? (
-        <p>No snapshots found for this case.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table border="1" cellPadding="6" width="100%">
+      {snapshots.length > 0 && (
+        <div
+          style={{
+            maxHeight: "60vh",
+            overflowY: "auto",
+            border: "1px solid #ddd",
+          }}
+        >
+          <table style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead>
               <tr>
-                <th>Time (PST)</th>
-                <th>Air °F</th>
-
-                {isPool && (
+                <th style={thStyle}>Time (PST)</th>
+                <th style={thStyle}>Air °F</th>
+                {isSpa ? (
                   <>
-                    <th>Pool °F</th>
-                    <th>Pool Set</th>
-                    <th>Pool Heater</th>
-                    <th>Filter Pump</th>
+                    <th style={thStyle}>Spa °F</th>
+                    <th style={thStyle}>Spa Set</th>
+                    <th style={thStyle}>Spa Heater</th>
+                    <th style={thStyle}>Spa Pump</th>
+                  </>
+                ) : (
+                  <>
+                    <th style={thStyle}>Pool °F</th>
+                    <th style={thStyle}>Pool Set</th>
+                    <th style={thStyle}>Pool Heater</th>
+                    <th style={thStyle}>Filter Pump</th>
                   </>
                 )}
-
-                {isSpa && (
-                  <>
-                    <th>Spa °F</th>
-                    <th>Spa Set</th>
-                    <th>Spa Heater</th>
-                    <th>Spa Pump</th>
-                  </>
-                )}
-
-                <th>Service Mode</th>
+                <th style={thStyle}>Service Mode</th>
               </tr>
             </thead>
             <tbody>
               {snapshots.map((s, i) => (
                 <tr key={i}>
-                  <td>{s.snapshot_ts_pst || "—"}</td>
-                  <td>{s.air_temp ?? "—"}</td>
+                  <td>{formatDateTime(s.snapshot_pst)}</td>
+                  <td>{unwrap(s.air_temp)}</td>
 
-                  {isPool && (
+                  {isSpa ? (
                     <>
-                      <td>{s.pool_temp ?? "—"}</td>
-                      <td>{s.set_point_pool ?? "—"}</td>
-                      <td>{s.pool_heater ? "ON" : "OFF"}</td>
-                      <td>{s.filter_pump ? "ON" : "OFF"}</td>
-                    </>
-                  )}
-
-                  {isSpa && (
-                    <>
-                      <td>{s.spa_temp ?? "—"}</td>
-                      <td>{s.set_point_spa ?? "—"}</td>
-                      <td>{s.spa_heater ? "ON" : "OFF"}</td>
+                      <td>{unwrap(s.spa_temp)}</td>
+                      <td>{unwrap(s.set_point_spa)}</td>
+                      <td>{heaterLabel(s.spa_heater)}</td>
                       <td>{s.spa_pump ? "ON" : "OFF"}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{unwrap(s.pool_temp)}</td>
+                      <td>{unwrap(s.set_point_pool)}</td>
+                      <td>{heaterLabel(s.pool_heater)}</td>
+                      <td>{s.filter_pump ? "ON" : "OFF"}</td>
                     </>
                   )}
 
@@ -159,3 +166,13 @@ export default function CaseDetail() {
     </div>
   );
 }
+
+const thStyle = {
+  position: "sticky",
+  top: 0,
+  background: "#f7f7f7",
+  zIndex: 2,
+  padding: "8px",
+  borderBottom: "1px solid #ccc",
+  textAlign: "left",
+};

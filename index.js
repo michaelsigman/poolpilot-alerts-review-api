@@ -30,6 +30,10 @@ function escapeString(value) {
   return value.replace(/'/g, "\\'");
 }
 
+const QUERY_OPTIONS = {
+  useQueryCache: false,
+};
+
 /* =====================================================
    Health check
 ===================================================== */
@@ -39,7 +43,10 @@ app.get("/health", async (req, res) => {
       SELECT COUNT(*) AS case_count
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
-    const [rows] = await bigquery.query({ query });
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
 
     res.json({
       ok: true,
@@ -47,23 +54,6 @@ app.get("/health", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/* =====================================================
-   Case summary (counts for tabs)
-===================================================== */
-app.get("/cases/summary", async (req, res) => {
-  try {
-    const query = `
-      SELECT status, COUNT(*) AS count
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      GROUP BY status
-    `;
-    const [rows] = await bigquery.query({ query });
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 
@@ -88,7 +78,10 @@ app.get("/cases/open", async (req, res) => {
       ORDER BY opened_at ASC
       LIMIT 200
     `;
-    const [rows] = await bigquery.query({ query });
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -116,7 +109,10 @@ app.get("/cases/resolved", async (req, res) => {
       ORDER BY resolved_at DESC
       LIMIT 200
     `;
-    const [rows] = await bigquery.query({ query });
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -146,6 +142,7 @@ app.get("/cases/:case_id", async (req, res) => {
     const [rows] = await bigquery.query({
       query,
       params: { case_id },
+      ...QUERY_OPTIONS,
     });
 
     if (!rows.length) {
@@ -197,75 +194,10 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
     const [rows] = await bigquery.query({
       query,
       params: { case_id },
+      ...QUERY_OPTIONS,
     });
 
     res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* =====================================================
-   Human-in-the-loop feedback
-===================================================== */
-app.post("/cases/:case_id/feedback", async (req, res) => {
-  const { case_id } = req.params;
-  const {
-    human_verdict,
-    expected_behavior,
-    suppression_reason,
-    suppress_hours,
-    resolution_reason,
-  } = req.body;
-
-  const updates = [];
-
-  if (human_verdict) {
-    updates.push(`human_verdict = '${escapeString(human_verdict)}'`);
-  }
-
-  if (expected_behavior !== undefined) {
-    updates.push(`expected_behavior = ${expected_behavior}`);
-  }
-
-  if (suppression_reason) {
-    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
-  }
-
-  if (suppress_hours) {
-    updates.push(
-      `suppress_until = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL ${Number(
-        suppress_hours
-      )} HOUR)`
-    );
-  }
-
-  if (resolution_reason) {
-    updates.push(
-      `resolution_reason = '${escapeString(resolution_reason)}'`
-    );
-  }
-
-  updates.push(`last_updated = CURRENT_TIMESTAMP()`);
-  updates.push(`updated_at = CURRENT_TIMESTAMP()`);
-
-  if (!updates.length) {
-    return res.status(400).json({ error: "No updates provided" });
-  }
-
-  const query = `
-    UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
-    SET ${updates.join(", ")}
-    WHERE case_id = @case_id
-  `;
-
-  try {
-    await bigquery.query({
-      query,
-      params: { case_id },
-    });
-
-    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
