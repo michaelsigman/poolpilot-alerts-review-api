@@ -56,35 +56,40 @@ app.get("/health", async (req, res) => {
 });
 
 // -----------------------------
-// GET /cases (open + resolved)
+// GET /cases
+// Review queue (open + observing)
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
     const query = `
       SELECT
         case_id,
-        system_id,
         agency_name,
         system_name,
         body_type,
         issue_type,
         status,
         opened_at,
-        resolved_at,
         alert_count,
 
-        start_pool_temp,
-        last_pool_temp,
         start_spa_temp,
         last_spa_temp,
+        start_pool_temp,
+        last_pool_temp,
 
-        TIMESTAMP_DIFF(
-          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
-          opened_at,
-          MINUTE
-        ) AS minutes_open
+        expected_behavior,
+        suppress_until,
+        human_verdict,
+
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      ORDER BY opened_at DESC
+      WHERE status IN ('open', 'observing')
+        AND (
+          expected_behavior IS DISTINCT FROM TRUE
+          OR suppress_until IS NULL
+          OR suppress_until <= CURRENT_TIMESTAMP()
+        )
+      ORDER BY opened_at ASC
     `;
 
     const [rows] = await bigquery.query({ query });
@@ -97,13 +102,33 @@ app.get("/cases", async (req, res) => {
 
 // -----------------------------
 // GET /cases/:case_id
+// Single case detail
 // -----------------------------
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
 
   try {
     const query = `
-      SELECT *
+      SELECT
+        case_id,
+        agency_name,
+        system_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        alert_count,
+
+        start_spa_temp,
+        last_spa_temp,
+        start_pool_temp,
+        last_pool_temp,
+
+        expected_behavior,
+        suppress_until,
+        human_verdict,
+
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -114,7 +139,7 @@ app.get("/cases/:case_id", async (req, res) => {
       params: { case_id },
     });
 
-    if (!rows.length) {
+    if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "Case not found" });
     }
 
@@ -127,62 +152,59 @@ app.get("/cases/:case_id", async (req, res) => {
 
 // -----------------------------
 // ✅ GET /cases/:case_id/snapshots
-// HARDENED VERSION (FIXED)
+// Snapshot timeline for a case (PST)
 // -----------------------------
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
   try {
-    // 1️⃣ Fetch case context
-    const caseQuery = `
+    const query = `
       SELECT
-        CAST(system_id AS STRING) AS system_id,
-        opened_at
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE case_id = @case_id
-      LIMIT 1
-    `;
+        -- Timestamp in PST for display
+        FORMAT_TIMESTAMP(
+          '%Y-%m-%d %H:%M:%S',
+          snapshot_ts,
+          'America/Los_Angeles'
+        ) AS snapshot_ts_pst,
 
-    const [caseRows] = await bigquery.query({
-      query: caseQuery,
-      params: { case_id },
-    });
+        snapshot_ts, -- keep raw UTC too (optional but useful)
 
-    if (!caseRows.length) {
-      return res.status(404).json({ error: "Case not found" });
-    }
-
-    const { system_id, opened_at } = caseRows[0];
-
-    // 2️⃣ Fetch snapshots (CAST BOTH SIDES)
-    const snapshotsQuery = `
-      SELECT
-        snapshot_ts,
         pool_temp,
         spa_temp,
         air_temp,
+
         set_point_pool,
         set_point_spa,
-        filter_pump,
-        spa_pump,
+
         pool_heater,
         spa_heater,
+
+        filter_pump,
+        spa_pump,
+
         service_mode
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
-      WHERE CAST(system_id AS STRING) = @system_id
-        AND snapshot_ts >= @opened_at
+      WHERE system_id = (
+        SELECT system_id
+        FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+        WHERE case_id = @case_id
+        LIMIT 1
+      )
+      AND snapshot_ts >= (
+        SELECT opened_at
+        FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+        WHERE case_id = @case_id
+        LIMIT 1
+      )
       ORDER BY snapshot_ts ASC
     `;
 
-    const [snapshots] = await bigquery.query({
-      query: snapshotsQuery,
-      params: {
-        system_id,
-        opened_at,
-      },
+    const [rows] = await bigquery.query({
+      query,
+      params: { case_id },
     });
 
-    res.json(snapshots);
+    res.json(rows);
   } catch (err) {
     console.error("❌ GET /cases/:case_id/snapshots failed:", err);
     res.status(500).json({ error: err.message });
@@ -191,6 +213,7 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
 // -----------------------------
 // POST /cases/:case_id/feedback
+// Human-in-the-loop updates ONLY
 // -----------------------------
 app.post("/cases/:case_id/feedback", async (req, res) => {
   const { case_id } = req.params;
@@ -213,7 +236,9 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (suppression_reason) {
-    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
+    updates.push(
+      `suppression_reason = '${escapeString(suppression_reason)}'`
+    );
   }
 
   if (suppress_hours) {
@@ -225,14 +250,18 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (resolution_reason) {
-    updates.push(`resolution_reason = '${escapeString(resolution_reason)}'`);
+    updates.push(
+      `resolution_reason = '${escapeString(resolution_reason)}'`
+    );
   }
 
   updates.push(`last_updated = CURRENT_TIMESTAMP()`);
   updates.push(`updated_at = CURRENT_TIMESTAMP()`);
 
-  if (!updates.length) {
-    return res.status(400).json({ error: "No fields to update" });
+  if (updates.length === 0) {
+    return res.status(400).json({
+      error: "No valid fields provided to update",
+    });
   }
 
   const query = `

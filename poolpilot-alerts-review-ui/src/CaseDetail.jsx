@@ -1,61 +1,63 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
 export default function CaseDetail() {
-  const { caseId } = useParams();
-  const navigate = useNavigate();
+  const { caseId } = useParams(); // ✅ FIX
 
   const [caseData, setCaseData] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
+  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadCase();
-    loadSnapshots();
+    async function load() {
+      try {
+        // -------- Case --------
+        const caseRes = await fetch(`${API_BASE}/cases/${caseId}`);
+        const caseJson = await caseRes.json();
+
+        console.log("📦 Case response:", caseJson);
+
+        if (!caseRes.ok || caseJson?.error) {
+          throw new Error(caseJson?.error || "Case not found");
+        }
+
+        setCaseData(caseJson);
+
+        // -------- Snapshots --------
+        const snapRes = await fetch(
+          `${API_BASE}/cases/${caseId}/snapshots`
+        );
+        const snapJson = await snapRes.json();
+
+        console.log("📸 Snapshots:", snapJson);
+        setSnapshots(Array.isArray(snapJson) ? snapJson : []);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
   }, [caseId]);
 
-  async function loadCase() {
-    const res = await fetch(`${API_BASE}/cases/${caseId}`);
-    const data = await res.json();
-    setCaseData(data);
-  }
-
-  async function loadSnapshots() {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/snapshots`);
-    const data = await res.json();
-    setSnapshots(data.snapshots || []);
-    setLoading(false);
-  }
-
-  if (loading || !caseData) {
-    return <div style={{ padding: 20 }}>Loading case…</div>;
-  }
+  if (loading) return <p>Loading case…</p>;
+  if (error) return <p style={{ color: "red" }}>Error: {error}</p>;
+  if (!caseData) return <p>No case data.</p>;
 
   return (
     <div style={{ padding: 20 }}>
-      <button onClick={() => navigate("/")} style={{ marginBottom: 16 }}>
-        ← Back to cases
-      </button>
-
       <h2>{caseData.system_name}</h2>
-      <p><b>Issue:</b> {caseData.issue_type}</p>
-      <p><b>Status:</b> {caseData.status}</p>
-      <p><b>Minutes Open:</b> {caseData.minutes_open}</p>
 
-      {/* ---------------------------
-          Temperature Summary
-      ---------------------------- */}
+      <p><strong>Issue:</strong> {caseData.issue_type}</p>
+      <p><strong>Status:</strong> {caseData.status}</p>
+      <p><strong>Minutes Open:</strong> {caseData.minutes_open}</p>
+
       <h3>Temperature Comparison</h3>
-      <table border="1" cellPadding="6" style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th></th>
-            <th>Start</th>
-            <th>Current</th>
-          </tr>
-        </thead>
+      <table border="1" cellPadding="6">
         <tbody>
           <tr>
             <td>Pool</td>
@@ -70,65 +72,36 @@ export default function CaseDetail() {
         </tbody>
       </table>
 
-      {/* ---------------------------
-          Snapshots Table
-      ---------------------------- */}
-      <h3 style={{ marginTop: 30 }}>
-        Snapshots ({snapshots.length})
-      </h3>
+      <h3>Snapshots ({snapshots.length})</h3>
 
       {snapshots.length === 0 ? (
-        <p>No snapshots found for this case.</p>
+        <p>No snapshots found.</p>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            border="1"
-            cellPadding="6"
-            style={{
-              borderCollapse: "collapse",
-              width: "100%",
-              fontSize: 12,
-            }}
-          >
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Pool Temp</th>
-                <th>Spa Temp</th>
-                <th>Pool Set</th>
-                <th>Spa Set</th>
-                <th>Pool Heater</th>
-                <th>Spa Heater</th>
-                <th>Filter Pump</th>
-                <th>Spa Pump</th>
-                <th>Service Mode</th>
+        <table border="1" cellPadding="6" width="100%">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Pool</th>
+              <th>Spa</th>
+              <th>Air</th>
+              <th>Set</th>
+              <th>Heater</th>
+            </tr>
+          </thead>
+          <tbody>
+            {snapshots.map((s, i) => (
+              <tr key={i}>
+                <td>{new Date(s.snapshot_ts).toLocaleString()}</td>
+                <td>{s.pool_temp ?? "—"}</td>
+                <td>{s.spa_temp ?? "—"}</td>
+                <td>{s.air_temp ?? "—"}</td>
+                <td>{s.set_point_pool ?? "—"}</td>
+                <td>{s.pool_heater ? "ON" : "OFF"}</td>
               </tr>
-            </thead>
-            <tbody>
-              {snapshots.map((s, idx) => (
-                <tr key={idx}>
-                  <td>{new Date(s.snapshot_ts).toLocaleString()}</td>
-                  <td>{s.pool_temp ?? "—"}</td>
-                  <td>{s.spa_temp ?? "—"}</td>
-                  <td>{s.set_point_pool ?? "—"}</td>
-                  <td>{s.set_point_spa ?? "—"}</td>
-                  <td>{s.pool_heater ? "ON" : "OFF"}</td>
-                  <td>{s.spa_heater ? "ON" : "OFF"}</td>
-                  <td>{s.filter_pump ? "ON" : "OFF"}</td>
-                  <td>{s.spa_pump ? "ON" : "OFF"}</td>
-                  <td>{s.service_mode ? "YES" : "NO"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       )}
-
-      {/* ---------------------------
-          Human Review (future)
-      ---------------------------- */}
-      <h3 style={{ marginTop: 30 }}>Human Review</h3>
-      <p><b>Verdict:</b> {caseData.human_verdict || "Not reviewed"}</p>
     </div>
   );
 }
