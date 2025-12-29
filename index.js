@@ -5,9 +5,9 @@ import { BigQuery } from "@google-cloud/bigquery";
 
 dotenv.config();
 
-// -----------------------------
-// App setup
-// -----------------------------
+/* =====================================================
+   App setup
+===================================================== */
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -15,24 +15,24 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const PROJECT_ID = "poolpilot-analytics";
 
-// -----------------------------
-// BigQuery client
-// -----------------------------
+/* =====================================================
+   BigQuery client
+===================================================== */
 const bigquery = new BigQuery({
   projectId: PROJECT_ID,
 });
 
-// -----------------------------
-// Helpers
-// -----------------------------
+/* =====================================================
+   Helpers
+===================================================== */
 function escapeString(value) {
   if (typeof value !== "string") return value;
   return value.replace(/'/g, "\\'");
 }
 
-// -----------------------------
-// Health check
-// -----------------------------
+/* =====================================================
+   Health check
+===================================================== */
 app.get("/health", async (req, res) => {
   try {
     const query = `
@@ -40,88 +40,127 @@ app.get("/health", async (req, res) => {
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
     const [rows] = await bigquery.query({ query });
-    res.json({ ok: true, case_count: rows[0].case_count });
+
+    res.json({
+      ok: true,
+      case_count: rows[0].case_count,
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// -----------------------------
-// GET /cases
-// Returns ALL cases (frontend segments)
-// -----------------------------
-app.get("/cases", async (req, res) => {
+/* =====================================================
+   Case summary (counts for tabs)
+===================================================== */
+app.get("/cases/summary", async (req, res) => {
+  try {
+    const query = `
+      SELECT status, COUNT(*) AS count
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      GROUP BY status
+    `;
+    const [rows] = await bigquery.query({ query });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* =====================================================
+   Open cases (FAST)
+===================================================== */
+app.get("/cases/open", async (req, res) => {
   try {
     const query = `
       SELECT
         case_id,
         system_id,
-        agency_name,
         system_name,
+        agency_name,
         body_type,
         issue_type,
-
         status,
-        classification,
-        human_verdict,
-
         opened_at,
-        resolved_at,
-
-        alert_count,
-
-        TIMESTAMP_DIFF(
-          COALESCE(resolved_at, CURRENT_TIMESTAMP()),
-          opened_at,
-          MINUTE
-        ) AS minutes_open,
-
-        start_pool_temp,
-        start_spa_temp,
-        start_air_temp,
-        last_pool_temp,
-        last_spa_temp,
-        last_air_temp,
-
-        start_set_point_pool,
-        start_set_point_spa,
-        last_set_point_pool,
-        last_set_point_spa,
-
-        start_filter_pump,
-        start_spa_pump,
-        start_pool_heater,
-        start_spa_heater,
-        last_filter_pump,
-        last_spa_pump,
-        last_pool_heater,
-        last_spa_heater,
-
-        expected_behavior,
-        suppress_until,
-
-        created_at,
-        updated_at,
-        last_updated
-
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      ORDER BY
-        status != 'open',
-        opened_at DESC
+      WHERE status = 'open'
+      ORDER BY opened_at ASC
+      LIMIT 200
     `;
-
     const [rows] = await bigquery.query({ query });
     res.json(rows);
   } catch (err) {
-    console.error("❌ GET /cases failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// -----------------------------
-// GET /cases/:case_id/snapshots
-// Returns snapshots ONLY for this case window
-// -----------------------------
+/* =====================================================
+   Resolved cases (FAST)
+===================================================== */
+app.get("/cases/resolved", async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        case_id,
+        system_id,
+        system_name,
+        agency_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        resolved_at
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      WHERE status = 'resolved'
+      ORDER BY resolved_at DESC
+      LIMIT 200
+    `;
+    const [rows] = await bigquery.query({ query });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* =====================================================
+   Single case detail
+===================================================== */
+app.get("/cases/:case_id", async (req, res) => {
+  const { case_id } = req.params;
+
+  try {
+    const query = `
+      SELECT
+        *,
+        TIMESTAMP_DIFF(
+          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
+          opened_at,
+          MINUTE
+        ) AS minutes_open
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      WHERE case_id = @case_id
+      LIMIT 1
+    `;
+
+    const [rows] = await bigquery.query({
+      query,
+      params: { case_id },
+    });
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Case not found" });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* =====================================================
+   Snapshots for a case (PST)
+===================================================== */
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
@@ -130,28 +169,27 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
       WITH c AS (
         SELECT
           system_id,
+          body_type,
           opened_at,
-          COALESCE(resolved_at, CURRENT_TIMESTAMP()) AS end_ts,
-          body_type
+          IFNULL(resolved_at, CURRENT_TIMESTAMP()) AS end_ts
         FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
         WHERE case_id = @case_id
+        LIMIT 1
       )
       SELECT
-        s.snapshot_ts,
+        DATETIME(s.snapshot_ts, "America/Los_Angeles") AS snapshot_pst,
         s.air_temp,
         s.pool_temp,
         s.spa_temp,
-        CASE
-          WHEN c.body_type = 'pool' THEN s.set_point_pool
-          ELSE s.set_point_spa
-        END AS set_point,
+        s.set_point_pool,
+        s.set_point_spa,
         s.pool_heater,
         s.spa_heater,
         s.filter_pump,
         s.spa_pump,
         s.service_mode
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\` s
-      JOIN c ON s.system_id = c.system_id
+      JOIN c ON c.system_id = s.system_id
       WHERE s.snapshot_ts BETWEEN c.opened_at AND c.end_ts
       ORDER BY s.snapshot_ts ASC
     `;
@@ -163,14 +201,79 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    console.error("❌ GET /snapshots failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// -----------------------------
-// Start server
-// -----------------------------
+/* =====================================================
+   Human-in-the-loop feedback
+===================================================== */
+app.post("/cases/:case_id/feedback", async (req, res) => {
+  const { case_id } = req.params;
+  const {
+    human_verdict,
+    expected_behavior,
+    suppression_reason,
+    suppress_hours,
+    resolution_reason,
+  } = req.body;
+
+  const updates = [];
+
+  if (human_verdict) {
+    updates.push(`human_verdict = '${escapeString(human_verdict)}'`);
+  }
+
+  if (expected_behavior !== undefined) {
+    updates.push(`expected_behavior = ${expected_behavior}`);
+  }
+
+  if (suppression_reason) {
+    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
+  }
+
+  if (suppress_hours) {
+    updates.push(
+      `suppress_until = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL ${Number(
+        suppress_hours
+      )} HOUR)`
+    );
+  }
+
+  if (resolution_reason) {
+    updates.push(
+      `resolution_reason = '${escapeString(resolution_reason)}'`
+    );
+  }
+
+  updates.push(`last_updated = CURRENT_TIMESTAMP()`);
+  updates.push(`updated_at = CURRENT_TIMESTAMP()`);
+
+  if (!updates.length) {
+    return res.status(400).json({ error: "No updates provided" });
+  }
+
+  const query = `
+    UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
+    SET ${updates.join(", ")}
+    WHERE case_id = @case_id
+  `;
+
+  try {
+    await bigquery.query({
+      query,
+      params: { case_id },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* =====================================================
+   Start server
+===================================================== */
 app.listen(PORT, () => {
-  console.log(`🚀 Alerts Review API running on port ${PORT}`);
+  console.log(`🚀 PoolPilot Alerts Review API running on port ${PORT}`);
 });
