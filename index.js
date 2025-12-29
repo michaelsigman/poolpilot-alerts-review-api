@@ -35,10 +35,8 @@ app.get("/health", async (req, res) => {
       SELECT COUNT(*) AS case_count
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
-    const [rows] = await bigquery.query({
-      query,
-      ...QUERY_OPTIONS,
-    });
+
+    const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
 
     res.json({
       ok: true,
@@ -50,7 +48,7 @@ app.get("/health", async (req, res) => {
 });
 
 /* =====================================================
-   ALL CASES (NEW – REQUIRED BY FRONTEND)
+   ALL cases (single source of truth)
 ===================================================== */
 app.get("/cases", async (req, res) => {
   try {
@@ -63,86 +61,25 @@ app.get("/cases", async (req, res) => {
         body_type,
         issue_type,
         status,
+
         opened_at,
+        DATETIME(opened_at, "America/Los_Angeles") AS opened_at_pst,
+
         resolved_at,
+        DATETIME(resolved_at, "America/Los_Angeles") AS resolved_at_pst,
+
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
           MINUTE
         ) AS minutes_open
+
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       ORDER BY opened_at DESC
       LIMIT 500
     `;
 
-    const [rows] = await bigquery.query({
-      query,
-      ...QUERY_OPTIONS,
-    });
-
-    res.json(rows);
-  } catch (err) {
-    console.error("Failed to fetch cases", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* =====================================================
-   Open cases (FAST)
-===================================================== */
-app.get("/cases/open", async (req, res) => {
-  try {
-    const query = `
-      SELECT
-        case_id,
-        system_id,
-        system_name,
-        agency_name,
-        body_type,
-        issue_type,
-        status,
-        opened_at,
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status = 'open'
-      ORDER BY opened_at ASC
-      LIMIT 200
-    `;
-    const [rows] = await bigquery.query({
-      query,
-      ...QUERY_OPTIONS,
-    });
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* =====================================================
-   Resolved cases (FAST)
-===================================================== */
-app.get("/cases/resolved", async (req, res) => {
-  try {
-    const query = `
-      SELECT
-        case_id,
-        system_id,
-        system_name,
-        agency_name,
-        body_type,
-        issue_type,
-        status,
-        opened_at,
-        resolved_at
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status = 'resolved'
-      ORDER BY resolved_at DESC
-      LIMIT 200
-    `;
-    const [rows] = await bigquery.query({
-      query,
-      ...QUERY_OPTIONS,
-    });
+    const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -158,12 +95,26 @@ app.get("/cases/:case_id", async (req, res) => {
   try {
     const query = `
       SELECT
-        *,
+        case_id,
+        system_id,
+        system_name,
+        agency_name,
+        body_type,
+        issue_type,
+        status,
+
+        opened_at,
+        DATETIME(opened_at, "America/Los_Angeles") AS opened_at_pst,
+
+        resolved_at,
+        DATETIME(resolved_at, "America/Los_Angeles") AS resolved_at_pst,
+
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
           MINUTE
         ) AS minutes_open
+
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -186,7 +137,7 @@ app.get("/cases/:case_id", async (req, res) => {
 });
 
 /* =====================================================
-   Snapshots for a case (PST)
+   Snapshots for a case (PST-safe)
 ===================================================== */
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
@@ -204,17 +155,21 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
         LIMIT 1
       )
       SELECT
+        s.snapshot_ts,
         DATETIME(s.snapshot_ts, "America/Los_Angeles") AS snapshot_pst,
+
         s.air_temp,
         s.pool_temp,
         s.spa_temp,
         s.set_point_pool,
         s.set_point_spa,
+
         s.pool_heater,
         s.spa_heater,
         s.filter_pump,
         s.spa_pump,
         s.service_mode
+
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\` s
       JOIN c ON c.system_id = s.system_id
       WHERE s.snapshot_ts BETWEEN c.opened_at AND c.end_ts
