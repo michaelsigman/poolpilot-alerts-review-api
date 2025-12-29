@@ -57,7 +57,7 @@ app.get("/health", async (req, res) => {
 
 // -----------------------------
 // GET /cases
-// Review queue (open + observing)
+// Open + observing cases ONLY
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
@@ -70,18 +70,24 @@ app.get("/cases", async (req, res) => {
         issue_type,
         status,
         opened_at,
+        resolved_at,
         alert_count,
 
-        start_spa_temp,
-        last_spa_temp,
         start_pool_temp,
         last_pool_temp,
+        start_spa_temp,
+        last_spa_temp,
 
         expected_behavior,
         suppress_until,
         human_verdict,
 
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
+        TIMESTAMP_DIFF(
+          COALESCE(resolved_at, CURRENT_TIMESTAMP()),
+          opened_at,
+          MINUTE
+        ) AS minutes_open
+
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE status IN ('open', 'observing')
         AND (
@@ -110,25 +116,7 @@ app.get("/cases/:case_id", async (req, res) => {
   try {
     const query = `
       SELECT
-        case_id,
-        agency_name,
-        system_name,
-        body_type,
-        issue_type,
-        status,
-        opened_at,
-        alert_count,
-
-        start_spa_temp,
-        last_spa_temp,
-        start_pool_temp,
-        last_pool_temp,
-
-        expected_behavior,
-        suppress_until,
-        human_verdict,
-
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), opened_at, MINUTE) AS minutes_open
+        *
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       WHERE case_id = @case_id
       LIMIT 1
@@ -151,57 +139,63 @@ app.get("/cases/:case_id", async (req, res) => {
 });
 
 // -----------------------------
-// ✅ GET /cases/:case_id/snapshots
-// Snapshot timeline for a case (PST)
+// GET /cases/:case_id/snapshots
+// Snapshot timeline for case
 // -----------------------------
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
   try {
-    const query = `
+    // 1️⃣ Fetch case window
+    const caseQuery = `
       SELECT
-        -- Timestamp in PST for display
-        FORMAT_TIMESTAMP(
-          '%Y-%m-%d %H:%M:%S',
-          snapshot_ts,
-          'America/Los_Angeles'
-        ) AS snapshot_ts_pst,
+        system_id,
+        opened_at,
+        resolved_at
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      WHERE case_id = @case_id
+      LIMIT 1
+    `;
 
-        snapshot_ts, -- keep raw UTC too (optional but useful)
+    const [caseRows] = await bigquery.query({
+      query: caseQuery,
+      params: { case_id },
+    });
 
+    if (!caseRows || caseRows.length === 0) {
+      return res.status(404).json({ error: "Case not found" });
+    }
+
+    const { system_id, opened_at, resolved_at } = caseRows[0];
+
+    // 2️⃣ Pull snapshots only within case window
+    const snapshotsQuery = `
+      SELECT
+        snapshot_ts,
+        air_temp,
         pool_temp,
         spa_temp,
-        air_temp,
-
         set_point_pool,
         set_point_spa,
-
         pool_heater,
         spa_heater,
-
         filter_pump,
         spa_pump,
-
         service_mode
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
-      WHERE system_id = (
-        SELECT system_id
-        FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-        WHERE case_id = @case_id
-        LIMIT 1
-      )
-      AND snapshot_ts >= (
-        SELECT opened_at
-        FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-        WHERE case_id = @case_id
-        LIMIT 1
-      )
+      WHERE system_id = @system_id
+        AND snapshot_ts >= @opened_at
+        AND snapshot_ts <= COALESCE(@resolved_at, CURRENT_TIMESTAMP())
       ORDER BY snapshot_ts ASC
     `;
 
     const [rows] = await bigquery.query({
-      query,
-      params: { case_id },
+      query: snapshotsQuery,
+      params: {
+        system_id,
+        opened_at,
+        resolved_at,
+      },
     });
 
     res.json(rows);
@@ -213,7 +207,7 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
 // -----------------------------
 // POST /cases/:case_id/feedback
-// Human-in-the-loop updates ONLY
+// Human-in-the-loop updates
 // -----------------------------
 app.post("/cases/:case_id/feedback", async (req, res) => {
   const { case_id } = req.params;
@@ -236,9 +230,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (suppression_reason) {
-    updates.push(
-      `suppression_reason = '${escapeString(suppression_reason)}'`
-    );
+    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
   }
 
   if (suppress_hours) {
@@ -250,9 +242,7 @@ app.post("/cases/:case_id/feedback", async (req, res) => {
   }
 
   if (resolution_reason) {
-    updates.push(
-      `resolution_reason = '${escapeString(resolution_reason)}'`
-    );
+    updates.push(`resolution_reason = '${escapeString(resolution_reason)}'`);
   }
 
   updates.push(`last_updated = CURRENT_TIMESTAMP()`);
