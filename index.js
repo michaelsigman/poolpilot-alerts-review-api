@@ -39,63 +39,75 @@ app.get("/health", async (req, res) => {
       SELECT COUNT(*) AS case_count
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
-
     const [rows] = await bigquery.query({ query });
-
-    res.json({
-      ok: true,
-      case_count: rows[0].case_count,
-    });
+    res.json({ ok: true, case_count: rows[0].case_count });
   } catch (err) {
-    console.error("❌ Health check failed:", err);
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 // -----------------------------
 // GET /cases
-// Open + observing cases ONLY
+// Returns ALL cases (frontend segments)
 // -----------------------------
 app.get("/cases", async (req, res) => {
   try {
     const query = `
       SELECT
         case_id,
+        system_id,
         agency_name,
         system_name,
         body_type,
         issue_type,
+
         status,
+        classification,
+        human_verdict,
+
         opened_at,
         resolved_at,
+
         alert_count,
-
-        start_pool_temp,
-        last_pool_temp,
-        start_spa_temp,
-        last_spa_temp,
-
-        expected_behavior,
-        suppress_until,
-        human_verdict,
 
         TIMESTAMP_DIFF(
           COALESCE(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
           MINUTE
-        ) AS minutes_open
+        ) AS minutes_open,
+
+        start_pool_temp,
+        start_spa_temp,
+        start_air_temp,
+        last_pool_temp,
+        last_spa_temp,
+        last_air_temp,
+
+        start_set_point_pool,
+        start_set_point_spa,
+        last_set_point_pool,
+        last_set_point_spa,
+
+        start_filter_pump,
+        start_spa_pump,
+        start_pool_heater,
+        start_spa_heater,
+        last_filter_pump,
+        last_spa_pump,
+        last_pool_heater,
+        last_spa_heater,
+
+        expected_behavior,
+        suppress_until,
+
+        created_at,
+        updated_at,
+        last_updated
 
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE status IN ('open', 'observing')
-        AND (
-          expected_behavior IS DISTINCT FROM TRUE
-          OR suppress_until IS NULL
-          OR suppress_until <= CURRENT_TIMESTAMP()
-        )
-      ORDER BY opened_at ASC
+      ORDER BY
+        status != 'open',
+        opened_at DESC
     `;
 
     const [rows] = await bigquery.query({ query });
@@ -107,168 +119,51 @@ app.get("/cases", async (req, res) => {
 });
 
 // -----------------------------
-// GET /cases/:case_id
-// Single case detail
-// -----------------------------
-app.get("/cases/:case_id", async (req, res) => {
-  const { case_id } = req.params;
-
-  try {
-    const query = `
-      SELECT
-        *
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE case_id = @case_id
-      LIMIT 1
-    `;
-
-    const [rows] = await bigquery.query({
-      query,
-      params: { case_id },
-    });
-
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ error: "Case not found" });
-    }
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("❌ GET /cases/:case_id failed:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -----------------------------
 // GET /cases/:case_id/snapshots
-// Snapshot timeline for case
+// Returns snapshots ONLY for this case window
 // -----------------------------
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
 
   try {
-    // 1️⃣ Fetch case window
-    const caseQuery = `
+    const query = `
+      WITH c AS (
+        SELECT
+          system_id,
+          opened_at,
+          COALESCE(resolved_at, CURRENT_TIMESTAMP()) AS end_ts,
+          body_type
+        FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+        WHERE case_id = @case_id
+      )
       SELECT
-        system_id,
-        opened_at,
-        resolved_at
-      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
-      WHERE case_id = @case_id
-      LIMIT 1
-    `;
-
-    const [caseRows] = await bigquery.query({
-      query: caseQuery,
-      params: { case_id },
-    });
-
-    if (!caseRows || caseRows.length === 0) {
-      return res.status(404).json({ error: "Case not found" });
-    }
-
-    const { system_id, opened_at, resolved_at } = caseRows[0];
-
-    // 2️⃣ Pull snapshots only within case window
-    const snapshotsQuery = `
-      SELECT
-        snapshot_ts,
-        air_temp,
-        pool_temp,
-        spa_temp,
-        set_point_pool,
-        set_point_spa,
-        pool_heater,
-        spa_heater,
-        filter_pump,
-        spa_pump,
-        service_mode
-      FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\`
-      WHERE system_id = @system_id
-        AND snapshot_ts >= @opened_at
-        AND snapshot_ts <= COALESCE(@resolved_at, CURRENT_TIMESTAMP())
-      ORDER BY snapshot_ts ASC
+        s.snapshot_ts,
+        s.air_temp,
+        s.pool_temp,
+        s.spa_temp,
+        CASE
+          WHEN c.body_type = 'pool' THEN s.set_point_pool
+          ELSE s.set_point_spa
+        END AS set_point,
+        s.pool_heater,
+        s.spa_heater,
+        s.filter_pump,
+        s.spa_pump,
+        s.service_mode
+      FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\` s
+      JOIN c ON s.system_id = c.system_id
+      WHERE s.snapshot_ts BETWEEN c.opened_at AND c.end_ts
+      ORDER BY s.snapshot_ts ASC
     `;
 
     const [rows] = await bigquery.query({
-      query: snapshotsQuery,
-      params: {
-        system_id,
-        opened_at,
-        resolved_at,
-      },
-    });
-
-    res.json(rows);
-  } catch (err) {
-    console.error("❌ GET /cases/:case_id/snapshots failed:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -----------------------------
-// POST /cases/:case_id/feedback
-// Human-in-the-loop updates
-// -----------------------------
-app.post("/cases/:case_id/feedback", async (req, res) => {
-  const { case_id } = req.params;
-  const {
-    human_verdict,
-    expected_behavior,
-    suppression_reason,
-    suppress_hours,
-    resolution_reason,
-  } = req.body;
-
-  const updates = [];
-
-  if (human_verdict) {
-    updates.push(`human_verdict = '${escapeString(human_verdict)}'`);
-  }
-
-  if (expected_behavior !== undefined) {
-    updates.push(`expected_behavior = ${expected_behavior}`);
-  }
-
-  if (suppression_reason) {
-    updates.push(`suppression_reason = '${escapeString(suppression_reason)}'`);
-  }
-
-  if (suppress_hours) {
-    updates.push(
-      `suppress_until = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL ${Number(
-        suppress_hours
-      )} HOUR)`
-    );
-  }
-
-  if (resolution_reason) {
-    updates.push(`resolution_reason = '${escapeString(resolution_reason)}'`);
-  }
-
-  updates.push(`last_updated = CURRENT_TIMESTAMP()`);
-  updates.push(`updated_at = CURRENT_TIMESTAMP()`);
-
-  if (updates.length === 0) {
-    return res.status(400).json({
-      error: "No valid fields provided to update",
-    });
-  }
-
-  const query = `
-    UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
-    SET ${updates.join(", ")}
-    WHERE case_id = @case_id
-  `;
-
-  try {
-    await bigquery.query({
       query,
       params: { case_id },
     });
 
-    res.json({ success: true });
+    res.json(rows);
   } catch (err) {
-    console.error("❌ POST /cases/:case_id/feedback failed:", err);
+    console.error("❌ GET /snapshots failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
