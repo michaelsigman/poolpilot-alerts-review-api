@@ -1,161 +1,84 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
+const API_BASE = "http://localhost:3001"; // adjust if needed
 
-function heaterLabel(value) {
-  if (value === 1) return "ON";
-  if (value === 3) return "STANDBY";
-  return "OFF";
-}
-
-function unwrap(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "object" && "value" in v) return v.value;
-  return v;
-}
-
-function formatDateTime(v) {
-  const raw = unwrap(v);
-  if (!raw) return "";
-
-  const date = new Date(raw);
-  if (isNaN(date.getTime())) return raw;
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "2-digit",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(date);
-}
-
-export default function CaseDetail({ caseId, onBack }) {
-  const [caseData, setCaseData] = useState(null);
+export default function CaseDetail({ caseData, onBack }) {
   const [snapshots, setSnapshots] = useState([]);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const caseRes = await fetch(`${API_BASE}/cases/${caseId}`);
-        const caseJson = await caseRes.json();
+    fetchSnapshots();
+  }, [caseData.case_id]);
 
-        const snapRes = await fetch(
-          `${API_BASE}/cases/${caseId}/snapshots`
-        );
-        const snapJson = await snapRes.json();
-
-        if (!Array.isArray(snapJson)) {
-          throw new Error("Snapshots response is not an array");
-        }
-
-        setCaseData(caseJson);
-        setSnapshots(snapJson);
-        setLoading(false);
-      } catch (err) {
-        console.error("Failed to load case detail", err);
-        setError(err.message);
-        setLoading(false);
-      }
+  async function fetchSnapshots() {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/cases/${caseData.case_id}/snapshots`
+      );
+      const data = await res.json();
+      setSnapshots(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Failed to load snapshots", err);
+      setSnapshots([]);
+    } finally {
+      setLoading(false);
     }
-
-    load();
-  }, [caseId]);
-
-  if (loading) return <p>Loading case…</p>;
-
-  if (error) {
-    return (
-      <div className="case-detail">
-        <button onClick={onBack}>← Back to cases</button>
-        <p style={{ color: "red" }}>
-          <b>Error:</b> {error}
-        </p>
-      </div>
-    );
   }
 
-  if (!caseData) return <p>Case not found</p>;
-
-  const isSpa = caseData.body_type === "spa";
+  function formatDate(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    return isNaN(d.getTime())
+      ? "—"
+      : d.toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
+  }
 
   return (
-    <div className="case-detail">
-      <button onClick={onBack}>← Back to cases</button>
+    <div style={{ padding: 20 }}>
+      <button onClick={onBack}>← Back</button>
 
-      {/* ===== Case Header ===== */}
-      <h2>{caseData.system_name}</h2>
+      <h3>{caseData.system_name}</h3>
+      <p><strong>Agency:</strong> {caseData.agency_name || "—"}</p>
+      <p><strong>Issue:</strong> {caseData.issue_type}</p>
+      <p><strong>Status:</strong> {caseData.status}</p>
+      <p><strong>Opened:</strong> {formatDate(caseData.opened_at)}</p>
 
-      <div style={{ marginBottom: "12px" }}>
-        <p>
-          <b>Agency:</b>{" "}
-          {caseData.agency_name || <i>Unknown</i>}
-        </p>
-        <p><b>Issue:</b> {caseData.issue_type}</p>
-        <p><b>Status:</b> {caseData.status}</p>
-        <p><b>Minutes Open:</b> {caseData.minutes_open}</p>
-      </div>
+      <h4>Snapshots</h4>
 
-      <h3>Snapshots ({snapshots.length})</h3>
+      {loading && <div>Loading snapshots…</div>}
 
-      {snapshots.length === 0 && <p>No snapshots found.</p>}
+      {!loading && snapshots.length === 0 && (
+        <div>No snapshot data.</div>
+      )}
 
-      {snapshots.length > 0 && (
-        <div
-          style={{
-            maxHeight: "60vh",
-            overflowY: "auto",
-            border: "1px solid #ddd",
-          }}
-        >
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
-            <thead>
+      {!loading && snapshots.length > 0 && (
+        <div style={{ maxHeight: 400, overflowY: "auto" }}>
+          <table border="1" cellPadding="6" cellSpacing="0" width="100%">
+            <thead style={{ position: "sticky", top: 0, background: "#eee" }}>
               <tr>
-                <th style={thStyle}>Time (PST)</th>
-                <th style={thStyle}>Air °F</th>
-                {isSpa ? (
-                  <>
-                    <th style={thStyle}>Spa °F</th>
-                    <th style={thStyle}>Spa Set</th>
-                    <th style={thStyle}>Spa Heater</th>
-                    <th style={thStyle}>Spa Pump</th>
-                  </>
-                ) : (
-                  <>
-                    <th style={thStyle}>Pool °F</th>
-                    <th style={thStyle}>Pool Set</th>
-                    <th style={thStyle}>Pool Heater</th>
-                    <th style={thStyle}>Filter Pump</th>
-                  </>
-                )}
-                <th style={thStyle}>Service Mode</th>
+                <th>Time (PST)</th>
+                <th>Air °F</th>
+                <th>Pool °F</th>
+                <th>Spa °F</th>
+                <th>Set Pool</th>
+                <th>Set Spa</th>
+                <th>Heater</th>
+                <th>Pump</th>
+                <th>Service</th>
               </tr>
             </thead>
             <tbody>
-              {snapshots.map((s, i) => (
-                <tr key={i}>
-                  <td>{formatDateTime(s.snapshot_pst)}</td>
-                  <td>{unwrap(s.air_temp)}</td>
-
-                  {isSpa ? (
-                    <>
-                      <td>{unwrap(s.spa_temp)}</td>
-                      <td>{unwrap(s.set_point_spa)}</td>
-                      <td>{heaterLabel(s.spa_heater)}</td>
-                      <td>{s.spa_pump ? "ON" : "OFF"}</td>
-                    </>
-                  ) : (
-                    <>
-                      <td>{unwrap(s.pool_temp)}</td>
-                      <td>{unwrap(s.set_point_pool)}</td>
-                      <td>{heaterLabel(s.pool_heater)}</td>
-                      <td>{s.filter_pump ? "ON" : "OFF"}</td>
-                    </>
-                  )}
-
+              {snapshots.map((s, idx) => (
+                <tr key={idx}>
+                  <td>{formatDate(s.snapshot_ts || s.snapshot_pst)}</td>
+                  <td>{s.air_temp ?? "—"}</td>
+                  <td>{s.pool_temp ?? "—"}</td>
+                  <td>{s.spa_temp ?? "—"}</td>
+                  <td>{s.set_point_pool ?? "—"}</td>
+                  <td>{s.set_point_spa ?? "—"}</td>
+                  <td>{s.pool_heater || s.spa_heater ? "ON" : "OFF"}</td>
+                  <td>{s.filter_pump || s.spa_pump ? "ON" : "OFF"}</td>
                   <td>{s.service_mode ? "YES" : "NO"}</td>
                 </tr>
               ))}
@@ -166,13 +89,3 @@ export default function CaseDetail({ caseId, onBack }) {
     </div>
   );
 }
-
-const thStyle = {
-  position: "sticky",
-  top: 0,
-  background: "#f7f7f7",
-  zIndex: 2,
-  padding: "8px",
-  borderBottom: "1px solid #ccc",
-  textAlign: "left",
-};

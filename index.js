@@ -22,14 +22,6 @@ const bigquery = new BigQuery({
   projectId: PROJECT_ID,
 });
 
-/* =====================================================
-   Helpers
-===================================================== */
-function escapeString(value) {
-  if (typeof value !== "string") return value;
-  return value.replace(/'/g, "\\'");
-}
-
 const QUERY_OPTIONS = {
   useQueryCache: false,
 };
@@ -54,6 +46,44 @@ app.get("/health", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* =====================================================
+   ALL CASES (NEW – REQUIRED BY FRONTEND)
+===================================================== */
+app.get("/cases", async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        case_id,
+        system_id,
+        system_name,
+        agency_name,
+        body_type,
+        issue_type,
+        status,
+        opened_at,
+        resolved_at,
+        TIMESTAMP_DIFF(
+          IFNULL(resolved_at, CURRENT_TIMESTAMP()),
+          opened_at,
+          MINUTE
+        ) AS minutes_open
+      FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
+      ORDER BY opened_at DESC
+      LIMIT 500
+    `;
+
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Failed to fetch cases", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
