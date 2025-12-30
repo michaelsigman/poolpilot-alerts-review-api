@@ -5,31 +5,20 @@ const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
 export default function App() {
   const [cases, setCases] = useState([]);
-  const [tab, setTab] = useState("open");
-  const [selectedCase, setSelectedCase] = useState(null);
+  const [tab, setTab] = useState("all");
+  const [selectedCaseId, setSelectedCaseId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchAllCases();
+    fetchCases();
   }, []);
 
-  async function fetchAllCases() {
+  async function fetchCases() {
     setLoading(true);
     try {
-      const [openRes, resolvedRes] = await Promise.all([
-        fetch(`${API_BASE}/cases/open`),
-        fetch(`${API_BASE}/cases/resolved`)
-      ]);
-
-      const openCases = await openRes.json();
-      const resolvedCases = await resolvedRes.json();
-
-      const merged = [
-        ...(Array.isArray(openCases) ? openCases : []),
-        ...(Array.isArray(resolvedCases) ? resolvedCases : [])
-      ];
-
-      setCases(merged);
+      const res = await fetch(`${API_BASE}/cases`);
+      const data = await res.json();
+      setCases(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch cases", err);
       setCases([]);
@@ -38,90 +27,83 @@ export default function App() {
     }
   }
 
-  function filterCases() {
-    if (tab === "open") {
-      return cases.filter(c => c.status === "open");
-    }
-    if (tab === "resolved") {
-      return cases.filter(c => c.status === "resolved");
-    }
-    if (tab === "capped") {
-      return cases.filter(c => c.issue_type?.includes("CAPPED"));
-    }
-    return [];
+  function filteredCases() {
+    if (tab === "open") return cases.filter(c => c.status === "open");
+    if (tab === "resolved") return cases.filter(c => c.status === "resolved");
+    if (tab === "capped") return cases.filter(c => c.issue_type?.includes("CAPPED"));
+    return cases;
   }
 
   function formatDate(ts) {
     if (!ts) return "—";
     const d = new Date(ts);
-    if (isNaN(d.getTime())) return "—";
-    return d.toLocaleString("en-US", {
-      timeZone: "America/Los_Angeles"
-    });
+    if (isNaN(d)) return "—";
+    return d.toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
   }
 
-  if (selectedCase) {
+  if (selectedCaseId) {
     return (
       <CaseDetail
-        caseData={selectedCase}
-        onBack={() => setSelectedCase(null)}
+        caseId={selectedCaseId}
+        onBack={() => setSelectedCaseId(null)}
       />
     );
   }
-
-  const openCount = cases.filter(c => c.status === "open").length;
-  const resolvedCount = cases.filter(c => c.status === "resolved").length;
-  const cappedCount = cases.filter(c =>
-    c.issue_type?.includes("CAPPED")
-  ).length;
 
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h2>PoolPilot – Alert Review</h2>
 
       <div style={{ marginBottom: 16 }}>
+        <button onClick={() => setTab("all")}>
+          All ({cases.length})
+        </button>{" "}
         <button onClick={() => setTab("open")}>
-          Open ({openCount})
+          Open ({cases.filter(c => c.status === "open").length})
         </button>{" "}
         <button onClick={() => setTab("resolved")}>
-          Resolved ({resolvedCount})
+          Resolved ({cases.filter(c => c.status === "resolved").length})
         </button>{" "}
         <button onClick={() => setTab("capped")}>
-          Heater Capped ({cappedCount})
+          Heater Capped ({cases.filter(c => c.issue_type?.includes("CAPPED")).length})
         </button>
       </div>
 
       {loading && <p>Loading cases…</p>}
 
-      {!loading && filterCases().length === 0 && (
+      {!loading && filteredCases().length === 0 && (
         <p>No cases to display.</p>
       )}
 
-      {!loading && filterCases().length > 0 && (
-        <table border="1" cellPadding="6" cellSpacing="0" width="100%">
+      {!loading && filteredCases().length > 0 && (
+        <table border="1" cellPadding="6" width="100%">
           <thead>
             <tr>
               <th>System</th>
+              <th>Agency</th>
               <th>Body</th>
               <th>Issue</th>
               <th>Status</th>
-              <th>Opened At (PST)</th>
+              <th>Opened (PST)</th>
+              <th>Resolved (PST)</th>
               <th>Minutes Open</th>
             </tr>
           </thead>
           <tbody>
-            {filterCases().map(c => (
+            {filteredCases().map(c => (
               <tr
                 key={c.case_id}
                 style={{ cursor: "pointer" }}
-                onClick={() => setSelectedCase(c)}
+                onClick={() => setSelectedCaseId(c.case_id)}
               >
-                <td>{c.system_name || "—"}</td>
+                <td>{c.system_name}</td>
+                <td>{c.agency_name || "—"}</td>
                 <td>{c.body_type}</td>
                 <td>{c.issue_type}</td>
                 <td>{c.status}</td>
                 <td>{formatDate(c.opened_at)}</td>
-                <td>{c.minutes_open ?? "—"}</td>
+                <td>{formatDate(c.resolved_at)}</td>
+                <td>{c.minutes_open}</td>
               </tr>
             ))}
           </tbody>

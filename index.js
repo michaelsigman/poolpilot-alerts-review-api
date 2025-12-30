@@ -35,13 +35,8 @@ app.get("/health", async (req, res) => {
       SELECT COUNT(*) AS case_count
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
-
     const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
-
-    res.json({
-      ok: true,
-      case_count: rows[0].case_count,
-    });
+    res.json({ ok: true, case_count: rows[0].case_count });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -63,10 +58,7 @@ app.get("/cases", async (req, res) => {
         status,
 
         opened_at,
-        DATETIME(opened_at, "America/Los_Angeles") AS opened_at_pst,
-
         resolved_at,
-        DATETIME(resolved_at, "America/Los_Angeles") AS resolved_at_pst,
 
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
@@ -104,10 +96,7 @@ app.get("/cases/:case_id", async (req, res) => {
         status,
 
         opened_at,
-        DATETIME(opened_at, "America/Los_Angeles") AS opened_at_pst,
-
         resolved_at,
-        DATETIME(resolved_at, "America/Los_Angeles") AS resolved_at_pst,
 
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
@@ -137,7 +126,7 @@ app.get("/cases/:case_id", async (req, res) => {
 });
 
 /* =====================================================
-   Snapshots for a case (PST-safe)
+   Snapshots for a case (TIMESTAMP SAFE)
 ===================================================== */
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
@@ -147,7 +136,6 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
       WITH c AS (
         SELECT
           system_id,
-          body_type,
           opened_at,
           IFNULL(resolved_at, CURRENT_TIMESTAMP()) AS end_ts
         FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
@@ -156,7 +144,6 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
       )
       SELECT
         s.snapshot_ts,
-        DATETIME(s.snapshot_ts, "America/Los_Angeles") AS snapshot_pst,
 
         s.air_temp,
         s.pool_temp,
