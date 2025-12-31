@@ -1,108 +1,161 @@
 import { useEffect, useState } from "react";
+import CaseDetail from "./CaseDetail";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
-export default function CaseDetail({ caseId, onBack }) {
-  const [caseData, setCaseData] = useState(null);
-  const [snapshots, setSnapshots] = useState([]);
+/* ================================
+   Timestamp helpers
+================================ */
+function normalizeTimestamp(ts) {
+  if (!ts) return null;
+  if (typeof ts === "string") return ts;
+  if (typeof ts === "object" && ts.value) return ts.value;
+  return null;
+}
+
+function formatPST(ts) {
+  const normalized = normalizeTimestamp(ts);
+  if (!normalized) return "—";
+
+  const d = new Date(normalized);
+  if (isNaN(d.getTime())) return "—";
+
+  return d.toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+/* ================================
+   URL helpers
+================================ */
+function getAgencyIdFromUrl() {
+  return new URLSearchParams(window.location.search).get("agency_id");
+}
+
+export default function App() {
+  const [cases, setCases] = useState([]);
+  const [tab, setTab] = useState("open");
+  const [selectedCase, setSelectedCase] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadCase();
-  }, [caseId]);
+  const agencyId = getAgencyIdFromUrl();
 
-  async function loadCase() {
+  useEffect(() => {
+    fetchCases();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agencyId]);
+
+  async function fetchCases() {
     setLoading(true);
     try {
-      const [caseRes, snapRes] = await Promise.all([
-        fetch(`${API_BASE}/cases/${caseId}`),
-        fetch(`${API_BASE}/cases/${caseId}/snapshots`)
-      ]);
+      const url = agencyId
+        ? `${API_BASE}/cases?agencyId=${agencyId}`   // ✅ FIX
+        : `${API_BASE}/cases`;
 
-      const caseJson = await caseRes.json();
-      const snapJson = await snapRes.json();
+      console.log("FETCH:", url);
 
-      setCaseData(caseJson);
-      setSnapshots(Array.isArray(snapJson) ? snapJson : []);
+      const res = await fetch(url);
+      const data = await res.json();
+      setCases(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Failed to load case detail", err);
+      console.error("Failed to fetch cases", err);
+      setCases([]);
     } finally {
       setLoading(false);
     }
   }
 
-  function formatDate(ts) {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    if (isNaN(d)) return "—";
-    return d.toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
+  function filteredCases() {
+    if (tab === "open") return cases.filter(c => c.status === "open");
+    if (tab === "resolved") return cases.filter(c => c.status === "resolved");
+    if (tab === "capped") return cases.filter(c => c.issue_type?.includes("CAPPED"));
+    return cases;
   }
 
-  if (loading) {
-    return (
-      <div style={{ padding: 20 }}>
-        <button onClick={onBack}>← Back</button>
-        <p>Loading case…</p>
-      </div>
-    );
-  }
+  const agencyMeta = cases[0] || {};
 
-  if (!caseData) {
+  if (selectedCase) {
     return (
-      <div style={{ padding: 20 }}>
-        <button onClick={onBack}>← Back</button>
-        <p>Failed to load case.</p>
-      </div>
+      <CaseDetail
+        caseData={selectedCase}
+        onBack={() => setSelectedCase(null)}
+      />
     );
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <button onClick={onBack}>← Back</button>
+    <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
+      <h2>PoolPilot – Alert Review</h2>
 
-      <h3>{caseData.system_name}</h3>
-      <p><strong>Agency:</strong> {caseData.agency_name || "—"}</p>
-      <p><strong>Issue:</strong> {caseData.issue_type}</p>
-      <p><strong>Status:</strong> {caseData.status}</p>
-      <p><strong>Opened:</strong> {formatDate(caseData.opened_at)}</p>
-      <p><strong>Resolved:</strong> {formatDate(caseData.resolved_at)}</p>
-      <p><strong>Minutes Open:</strong> {caseData.minutes_open}</p>
+      {agencyId ? (
+        <div style={{ marginBottom: 12 }}>
+          <strong>Agency:</strong> {agencyMeta.agency_name || "—"}<br />
+          {agencyMeta.agency_email && (
+            <>
+              <strong>Email:</strong> {agencyMeta.agency_email}<br />
+            </>
+          )}
+          {agencyMeta.agency_phone && (
+            <>
+              <strong>Phone:</strong> {agencyMeta.agency_phone}
+            </>
+          )}
+        </div>
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          <strong>Admin View – All Agencies</strong>
+        </div>
+      )}
 
-      <h4>Snapshots ({snapshots.length})</h4>
+      <div style={{ marginBottom: 16 }}>
+        <button onClick={() => setTab("open")}>
+          Open ({cases.filter(c => c.status === "open").length})
+        </button>{" "}
+        <button onClick={() => setTab("resolved")}>
+          Resolved ({cases.filter(c => c.status === "resolved").length})
+        </button>{" "}
+        <button onClick={() => setTab("capped")}>
+          Heater Capped ({cases.filter(c => c.issue_type?.includes("CAPPED")).length})
+        </button>
+      </div>
 
-      {snapshots.length === 0 && <p>No snapshot data.</p>}
+      {loading && <p>Loading cases…</p>}
 
-      {snapshots.length > 0 && (
-        <table border="1" cellPadding="6" width="100%">
+      {!loading && filteredCases().length === 0 && (
+        <p>No cases to display.</p>
+      )}
+
+      {!loading && filteredCases().length > 0 && (
+        <table border="1" cellPadding="6" cellSpacing="0" width="100%">
           <thead>
             <tr>
-              <th>Time (PST)</th>
-              <th>Air °F</th>
-              <th>Pool °F</th>
-              <th>Spa °F</th>
-              <th>Pool Set</th>
-              <th>Spa Set</th>
-              <th>Pool Heater</th>
-              <th>Spa Heater</th>
-              <th>Filter Pump</th>
-              <th>Spa Pump</th>
-              <th>Service Mode</th>
+              <th>System</th>
+              <th>Agency</th>
+              <th>Body</th>
+              <th>Issue</th>
+              <th>Status</th>
+              <th>Opened (PST)</th>
+              <th>Resolved (PST)</th>
+              <th>Minutes Open</th>
             </tr>
           </thead>
           <tbody>
-            {snapshots.map((s, i) => (
-              <tr key={i}>
-                <td>{formatDate(s.snapshot_pst)}</td>
-                <td>{s.air_temp ?? "—"}</td>
-                <td>{s.pool_temp ?? "—"}</td>
-                <td>{s.spa_temp ?? "—"}</td>
-                <td>{s.set_point_pool ?? "—"}</td>
-                <td>{s.set_point_spa ?? "—"}</td>
-                <td>{s.pool_heater}</td>
-                <td>{s.spa_heater}</td>
-                <td>{s.filter_pump}</td>
-                <td>{s.spa_pump}</td>
-                <td>{s.service_mode}</td>
+            {filteredCases().map(c => (
+              <tr
+                key={c.case_id}
+                style={{ cursor: "pointer" }}
+                onClick={() => setSelectedCase(c)}
+              >
+                <td>{c.system_name}</td>
+                <td>{c.agency_name || "—"}</td>
+                <td>{c.body_type}</td>
+                <td>{c.issue_type}</td>
+                <td>{c.status}</td>
+                <td>{formatPST(c.opened_at)}</td>
+                <td>{formatPST(c.resolved_at)}</td>
+                <td>{c.minutes_open ?? "—"}</td>
               </tr>
             ))}
           </tbody>

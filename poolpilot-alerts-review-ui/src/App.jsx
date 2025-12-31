@@ -1,82 +1,175 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CaseDetail from "./CaseDetail";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
+/* ================================
+   Timestamp helpers
+================================ */
+function normalizeTimestamp(ts) {
+  if (!ts) return null;
+  if (typeof ts === "string") return ts;
+  if (typeof ts === "object" && ts.value) return ts.value;
+  return null;
+}
+
+function formatPST(ts) {
+  const normalized = normalizeTimestamp(ts);
+  if (!normalized) return "—";
+
+  const d = new Date(normalized);
+  if (isNaN(d.getTime())) return "—";
+
+  return d.toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+/* ================================
+   URL helper
+================================ */
+function getAgencyIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("agency_id");
+}
+
 export default function App() {
   const [cases, setCases] = useState([]);
-  const [tab, setTab] = useState("all");
-  const [selectedCaseId, setSelectedCaseId] = useState(null);
+  const [tab, setTab] = useState("open");
+  const [selectedCase, setSelectedCase] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const agencyId = getAgencyIdFromUrl();
+
+  /* ================================
+     Fetch ALL cases (single source)
+  ================================ */
   useEffect(() => {
+    async function fetchCases() {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/cases`);
+        const data = await res.json();
+        setCases(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("Failed to fetch cases", err);
+        setCases([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+
     fetchCases();
   }, []);
 
-  async function fetchCases() {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/cases`);
-      const data = await res.json();
-      setCases(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Failed to fetch cases", err);
-      setCases([]);
-    } finally {
-      setLoading(false);
+  /* ================================
+     Agency scoping (STRICT)
+  ================================ */
+  const agencyScopedCases = useMemo(() => {
+    if (!agencyId) return cases;
+    return cases.filter(c => c.agency_id === agencyId);
+  }, [cases, agencyId]);
+
+  /* ================================
+     Tab filtering
+  ================================ */
+  const visibleCases = useMemo(() => {
+    if (tab === "open") {
+      return agencyScopedCases.filter(c => c.status === "open");
     }
-  }
+    if (tab === "resolved") {
+      return agencyScopedCases.filter(c => c.status === "resolved");
+    }
+    if (tab === "capped") {
+      return agencyScopedCases.filter(c =>
+        c.issue_type?.includes("CAPPED")
+      );
+    }
+    return agencyScopedCases;
+  }, [agencyScopedCases, tab]);
 
-  function filteredCases() {
-    if (tab === "open") return cases.filter(c => c.status === "open");
-    if (tab === "resolved") return cases.filter(c => c.status === "resolved");
-    if (tab === "capped") return cases.filter(c => c.issue_type?.includes("CAPPED"));
-    return cases;
-  }
+  /* ================================
+     Agency header info
+  ================================ */
+  const agencyInfo = useMemo(() => {
+    if (!agencyId || agencyScopedCases.length === 0) return null;
+    const c = agencyScopedCases[0];
+    return {
+      name: c.agency_name,
+      email: c.agency_email,
+      phone: c.agency_phone,
+    };
+  }, [agencyId, agencyScopedCases]);
 
-  function formatDate(ts) {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    if (isNaN(d)) return "—";
-    return d.toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
-  }
-
-  if (selectedCaseId) {
+  /* ================================
+     Case detail view
+  ================================ */
+  if (selectedCase) {
     return (
       <CaseDetail
-        caseId={selectedCaseId}
-        onBack={() => setSelectedCaseId(null)}
+        caseData={selectedCase}
+        onBack={() => setSelectedCase(null)}
       />
     );
   }
 
+  /* ================================
+     Render
+  ================================ */
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h2>PoolPilot – Alert Review</h2>
 
+      {/* Header */}
+      {agencyId ? (
+        <div style={{ marginBottom: 12 }}>
+          <strong>Agency:</strong> {agencyInfo?.name || "—"}
+          <br />
+          {agencyInfo?.email && (
+            <>
+              <strong>Email:</strong> {agencyInfo.email}
+              <br />
+            </>
+          )}
+          {agencyInfo?.phone && (
+            <>
+              <strong>Phone:</strong> {agencyInfo.phone}
+            </>
+          )}
+        </div>
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          <strong>Admin View – All Agencies</strong>
+        </div>
+      )}
+
+      {/* Tabs */}
       <div style={{ marginBottom: 16 }}>
-        <button onClick={() => setTab("all")}>
-          All ({cases.length})
-        </button>{" "}
         <button onClick={() => setTab("open")}>
-          Open ({cases.filter(c => c.status === "open").length})
+          Open ({agencyScopedCases.filter(c => c.status === "open").length})
         </button>{" "}
         <button onClick={() => setTab("resolved")}>
-          Resolved ({cases.filter(c => c.status === "resolved").length})
+          Resolved ({agencyScopedCases.filter(c => c.status === "resolved").length})
         </button>{" "}
         <button onClick={() => setTab("capped")}>
-          Heater Capped ({cases.filter(c => c.issue_type?.includes("CAPPED")).length})
+          Heater Capped (
+          {agencyScopedCases.filter(c =>
+            c.issue_type?.includes("CAPPED")
+          ).length}
+          )
         </button>
       </div>
 
       {loading && <p>Loading cases…</p>}
 
-      {!loading && filteredCases().length === 0 && (
+      {!loading && visibleCases.length === 0 && (
         <p>No cases to display.</p>
       )}
 
-      {!loading && filteredCases().length > 0 && (
-        <table border="1" cellPadding="6" width="100%">
+      {!loading && visibleCases.length > 0 && (
+        <table border="1" cellPadding="6" cellSpacing="0" width="100%">
           <thead>
             <tr>
               <th>System</th>
@@ -90,20 +183,20 @@ export default function App() {
             </tr>
           </thead>
           <tbody>
-            {filteredCases().map(c => (
+            {visibleCases.map(c => (
               <tr
                 key={c.case_id}
                 style={{ cursor: "pointer" }}
-                onClick={() => setSelectedCaseId(c.case_id)}
+                onClick={() => setSelectedCase(c)}
               >
                 <td>{c.system_name}</td>
                 <td>{c.agency_name || "—"}</td>
                 <td>{c.body_type}</td>
                 <td>{c.issue_type}</td>
                 <td>{c.status}</td>
-                <td>{formatDate(c.opened_at)}</td>
-                <td>{formatDate(c.resolved_at)}</td>
-                <td>{c.minutes_open}</td>
+                <td>{formatPST(c.opened_at)}</td>
+                <td>{formatPST(c.resolved_at)}</td>
+                <td>{c.minutes_open ?? "—"}</td>
               </tr>
             ))}
           </tbody>

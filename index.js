@@ -56,27 +56,18 @@ app.get("/cases", async (req, res) => {
         body_type,
         issue_type,
         status,
-
         opened_at,
         resolved_at,
-
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
           MINUTE
         ) AS minutes_open
-
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       ORDER BY opened_at DESC
       LIMIT 500
     `;
 
-    const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 /* =====================================================
    Single case detail
