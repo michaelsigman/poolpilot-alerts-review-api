@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import CaseDetail from "./CaseDetail";
+import { useParams, useNavigate } from "react-router-dom";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
 /* ================================
-   Timestamp helpers
+   Helpers
 ================================ */
 function normalizeTimestamp(ts) {
   if (!ts) return null;
@@ -14,150 +14,205 @@ function normalizeTimestamp(ts) {
 }
 
 function formatPST(ts) {
-  const normalized = normalizeTimestamp(ts);
-  if (!normalized) return "—";
-
-  const d = new Date(normalized);
-  if (isNaN(d.getTime())) return "—";
-
-  return d.toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  const n = normalizeTimestamp(ts);
+  if (!n) return "—";
+  const d = new Date(n);
+  return isNaN(d)
+    ? "—"
+    : d.toLocaleString("en-US", {
+        timeZone: "America/Los_Angeles",
+        dateStyle: "short",
+        timeStyle: "medium",
+      });
 }
 
-/* ================================
-   URL helpers
-================================ */
-function getAgencyIdFromUrl() {
-  return new URLSearchParams(window.location.search).get("agency_id");
-}
+const heaterLabel = v =>
+  v === 1 ? "On" : v === 3 ? "On (Standby)" : "Off";
 
-export default function App() {
-  const [cases, setCases] = useState([]);
-  const [tab, setTab] = useState("open");
-  const [selectedCase, setSelectedCase] = useState(null);
+const pumpLabel = v => (v === 1 ? "On" : "Off");
+
+export default function CaseDetail() {
+  const { case_id } = useParams();
+  const navigate = useNavigate();
+
+  const [caseData, setCaseData] = useState(null);
+  const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [resolving, setResolving] = useState(false);
 
-  const agencyId = getAgencyIdFromUrl();
-
+  /* ================================
+     1️⃣ Load case metadata
+  ================================ */
   useEffect(() => {
-    fetchCases();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agencyId]);
+    async function loadCase() {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/cases/${case_id}`);
+        const data = await res.json();
+        setCaseData(data);
+      } catch (e) {
+        console.error("Failed to load case", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadCase();
+  }, [case_id]);
 
-  async function fetchCases() {
-    setLoading(true);
+  /* ================================
+     2️⃣ Load snapshots AFTER case loads
+  ================================ */
+  useEffect(() => {
+    if (!caseData?.case_id) return;
+
+    async function loadSnapshots() {
+      try {
+        const res = await fetch(
+          `${API_BASE}/cases/${caseData.case_id}/snapshots`
+        );
+        const data = await res.json();
+        setSnapshots(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error("Failed to load snapshots", e);
+        setSnapshots([]);
+      }
+    }
+
+    loadSnapshots();
+  }, [caseData]);
+
+  /* ================================
+     3️⃣ Resolve case (SAFE)
+  ================================ */
+  async function resolveCase() {
+    if (!window.confirm("Mark this case as resolved?")) return;
+
+    setResolving(true);
     try {
-      const url = agencyId
-        ? `${API_BASE}/cases?agencyId=${agencyId}`   // ✅ FIX
-        : `${API_BASE}/cases`;
+      await fetch(
+        `${API_BASE}/cases/${caseData.case_id}/resolve`,
+        { method: "POST" }
+      );
 
-      console.log("FETCH:", url);
-
-      const res = await fetch(url);
-      const data = await res.json();
-      setCases(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Failed to fetch cases", err);
-      setCases([]);
+      // Reload updated case state
+      const res = await fetch(`${API_BASE}/cases/${caseData.case_id}`);
+      const updated = await res.json();
+      setCaseData(updated);
+    } catch (e) {
+      console.error("Failed to resolve case", e);
+      alert("Failed to resolve case");
     } finally {
-      setLoading(false);
+      setResolving(false);
     }
   }
 
-  function filteredCases() {
-    if (tab === "open") return cases.filter(c => c.status === "open");
-    if (tab === "resolved") return cases.filter(c => c.status === "resolved");
-    if (tab === "capped") return cases.filter(c => c.issue_type?.includes("CAPPED"));
-    return cases;
-  }
+  if (loading) return <div style={{ padding: 20 }}>Loading case…</div>;
+  if (!caseData) return <div style={{ padding: 20 }}>Case not found</div>;
 
-  const agencyMeta = cases[0] || {};
-
-  if (selectedCase) {
-    return (
-      <CaseDetail
-        caseData={selectedCase}
-        onBack={() => setSelectedCase(null)}
-      />
-    );
-  }
+  const isSpa = caseData.body_type === "spa";
+  const isPool = caseData.body_type === "pool";
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
-      <h2>PoolPilot – Alert Review</h2>
+    <div style={{ padding: 20 }}>
+      <button onClick={() => navigate(-1)}>← Back</button>
 
-      {agencyId ? (
-        <div style={{ marginBottom: 12 }}>
-          <strong>Agency:</strong> {agencyMeta.agency_name || "—"}<br />
-          {agencyMeta.agency_email && (
-            <>
-              <strong>Email:</strong> {agencyMeta.agency_email}<br />
-            </>
-          )}
-          {agencyMeta.agency_phone && (
-            <>
-              <strong>Phone:</strong> {agencyMeta.agency_phone}
-            </>
-          )}
-        </div>
-      ) : (
-        <div style={{ marginBottom: 12 }}>
-          <strong>Admin View – All Agencies</strong>
-        </div>
-      )}
+      <h2>{caseData.system_name}</h2>
 
-      <div style={{ marginBottom: 16 }}>
-        <button onClick={() => setTab("open")}>
-          Open ({cases.filter(c => c.status === "open").length})
-        </button>{" "}
-        <button onClick={() => setTab("resolved")}>
-          Resolved ({cases.filter(c => c.status === "resolved").length})
-        </button>{" "}
-        <button onClick={() => setTab("capped")}>
-          Heater Capped ({cases.filter(c => c.issue_type?.includes("CAPPED")).length})
+      <p><strong>Agency:</strong> {caseData.agency_name}</p>
+      <p><strong>Issue:</strong> {caseData.issue_type}</p>
+      <p><strong>Status:</strong> {caseData.status}</p>
+
+      {caseData.status === "open" && (
+        <button
+          onClick={resolveCase}
+          disabled={resolving}
+          style={{
+            marginTop: 10,
+            marginBottom: 20,
+            background: "#d9534f",
+            color: "white",
+            padding: "8px 14px",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            opacity: resolving ? 0.6 : 1,
+          }}
+        >
+          {resolving ? "Resolving…" : "Resolve Case"}
         </button>
-      </div>
-
-      {loading && <p>Loading cases…</p>}
-
-      {!loading && filteredCases().length === 0 && (
-        <p>No cases to display.</p>
       )}
 
-      {!loading && filteredCases().length > 0 && (
-        <table border="1" cellPadding="6" cellSpacing="0" width="100%">
+      <h3>Snapshots</h3>
+
+      {snapshots.length === 0 && <p>LOADING...</p>}
+
+      {snapshots.length > 0 && (
+        <table border="1" cellPadding="6" width="100%">
           <thead>
             <tr>
-              <th>System</th>
-              <th>Agency</th>
-              <th>Body</th>
-              <th>Issue</th>
-              <th>Status</th>
-              <th>Opened (PST)</th>
-              <th>Resolved (PST)</th>
-              <th>Minutes Open</th>
+              <th>Time</th>
+              <th>Air</th>
+
+              {isSpa && (
+                <>
+                  <th>Spa Temp</th>
+                  <th>Spa Set</th>
+                  <th>Spa Heater</th>
+                  <th>Spa Pump</th>
+                </>
+              )}
+
+              {isPool && (
+                <>
+                  <th>Pool Temp</th>
+                  <th>Pool Set</th>
+                  <th>Pool Heater</th>
+                  <th>Filter Pump</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
-            {filteredCases().map(c => (
-              <tr
-                key={c.case_id}
-                style={{ cursor: "pointer" }}
-                onClick={() => setSelectedCase(c)}
-              >
-                <td>{c.system_name}</td>
-                <td>{c.agency_name || "—"}</td>
-                <td>{c.body_type}</td>
-                <td>{c.issue_type}</td>
-                <td>{c.status}</td>
-                <td>{formatPST(c.opened_at)}</td>
-                <td>{formatPST(c.resolved_at)}</td>
-                <td>{c.minutes_open ?? "—"}</td>
-              </tr>
-            ))}
+            {snapshots.map((s, i) => {
+              const highlightSpa =
+                isSpa && s.spa_heater === 1 && s.spa_pump === 1;
+
+              const highlightPool =
+                isPool && s.pool_heater === 1 && s.filter_pump === 1;
+
+              return (
+                <tr
+                  key={i}
+                  style={{
+                    background:
+                      highlightSpa || highlightPool
+                        ? "#fdecea"
+                        : "transparent",
+                  }}
+                >
+                  <td>{formatPST(s.snapshot_ts)}</td>
+                  <td>{s.air_temp ?? "—"}</td>
+
+                  {isSpa && (
+                    <>
+                      <td>{s.spa_temp ?? "—"}</td>
+                      <td>{s.set_point_spa ?? "—"}</td>
+                      <td>{heaterLabel(s.spa_heater)}</td>
+                      <td>{pumpLabel(s.spa_pump)}</td>
+                    </>
+                  )}
+
+                  {isPool && (
+                    <>
+                      <td>{s.pool_temp ?? "—"}</td>
+                      <td>{s.set_point_pool ?? "—"}</td>
+                      <td>{heaterLabel(s.pool_heater)}</td>
+                      <td>{pumpLabel(s.filter_pump)}</td>
+                    </>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -78,6 +78,45 @@ app.get("/cases", async (req, res) => {
 });
 
 /* =====================================================
+   Resolve a case (manual resolution)
+===================================================== */
+app.post("/cases/:case_id/resolve", async (req, res) => {
+  const { case_id } = req.params;
+
+  try {
+    const query = `
+      UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
+      SET
+        status = 'resolved',
+        resolved_at = CURRENT_TIMESTAMP(),
+        resolution_reason = 'manual'
+      WHERE case_id = @case_id
+        AND status = 'open'
+    `;
+
+    const [job] = await bigquery.createQueryJob({
+      query,
+      params: { case_id },
+      ...QUERY_OPTIONS,
+    });
+
+    await job.getQueryResults();
+
+    res.json({
+      ok: true,
+      case_id,
+      message: "Case resolved successfully",
+    });
+  } catch (err) {
+    console.error("Failed to resolve case", err);
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
+/* =====================================================
    Single case detail
 ===================================================== */
 app.get("/cases/:case_id", async (req, res) => {

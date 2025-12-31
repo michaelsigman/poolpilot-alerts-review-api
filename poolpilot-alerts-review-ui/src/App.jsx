@@ -1,35 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import CaseDetail from "./CaseDetail";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 const API_BASE = "https://poolpilot-alerts-review-api.onrender.com";
 
-/* ================================
-   Timestamp helpers
-================================ */
-function normalizeTimestamp(ts) {
-  if (!ts) return null;
-  if (typeof ts === "string") return ts;
-  if (typeof ts === "object" && ts.value) return ts.value;
-  return null;
-}
-
-function formatPST(ts) {
-  const normalized = normalizeTimestamp(ts);
-  if (!normalized) return "—";
-
-  const d = new Date(normalized);
-  if (isNaN(d.getTime())) return "—";
-
-  return d.toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-/* ================================
-   URL helper
-================================ */
 function getAgencyIdFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get("agency_id");
@@ -38,170 +11,171 @@ function getAgencyIdFromUrl() {
 export default function App() {
   const [cases, setCases] = useState([]);
   const [tab, setTab] = useState("open");
-  const [selectedCase, setSelectedCase] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const agencyId = getAgencyIdFromUrl();
+  const navigate = useNavigate();
 
-  /* ================================
-     Fetch ALL cases (single source)
-  ================================ */
   useEffect(() => {
-    async function fetchCases() {
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_BASE}/cases`);
-        const data = await res.json();
-        setCases(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error("Failed to fetch cases", err);
-        setCases([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-
     fetchCases();
-  }, []);
+  }, [agencyId]);
 
-  /* ================================
-     Agency scoping (STRICT)
-  ================================ */
-  const agencyScopedCases = useMemo(() => {
-    if (!agencyId) return cases;
-    return cases.filter(c => c.agency_id === agencyId);
-  }, [cases, agencyId]);
-
-  /* ================================
-     Tab filtering
-  ================================ */
-  const visibleCases = useMemo(() => {
-    if (tab === "open") {
-      return agencyScopedCases.filter(c => c.status === "open");
+  async function fetchCases() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/cases`);
+      const data = await res.json();
+      setCases(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-    if (tab === "resolved") {
-      return agencyScopedCases.filter(c => c.status === "resolved");
-    }
-    if (tab === "capped") {
-      return agencyScopedCases.filter(c =>
-        c.issue_type?.includes("CAPPED")
-      );
-    }
-    return agencyScopedCases;
-  }, [agencyScopedCases, tab]);
-
-  /* ================================
-     Agency header info
-  ================================ */
-  const agencyInfo = useMemo(() => {
-    if (!agencyId || agencyScopedCases.length === 0) return null;
-    const c = agencyScopedCases[0];
-    return {
-      name: c.agency_name,
-      email: c.agency_email,
-      phone: c.agency_phone,
-    };
-  }, [agencyId, agencyScopedCases]);
-
-  /* ================================
-     Case detail view
-  ================================ */
-  if (selectedCase) {
-    return (
-      <CaseDetail
-        caseData={selectedCase}
-        onBack={() => setSelectedCase(null)}
-      />
-    );
   }
 
-  /* ================================
-     Render
-  ================================ */
+  function filteredCases() {
+    let filtered = cases;
+
+    if (agencyId) {
+      filtered = filtered.filter(c => c.agency_id === agencyId);
+    }
+
+    if (tab === "open") {
+      filtered = filtered.filter(c => c.status === "open");
+    }
+    if (tab === "resolved") {
+      filtered = filtered.filter(c => c.status === "resolved");
+    }
+
+    return filtered;
+  }
+
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
-      <h2>PoolPilot – Alert Review</h2>
+    <div
+      style={{
+        padding: 24,
+        fontFamily: "Inter, system-ui, -apple-system, sans-serif",
+        background: "#f5f7fb",
+        minHeight: "100vh",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1100,
+          margin: "0 auto",
+          background: "#fff",
+          borderRadius: 10,
+          padding: 24,
+          boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>PoolPilot – Alert Review</h2>
 
-      {/* Header */}
-      {agencyId ? (
-        <div style={{ marginBottom: 12 }}>
-          <strong>Agency:</strong> {agencyInfo?.name || "—"}
-          <br />
-          {agencyInfo?.email && (
-            <>
-              <strong>Email:</strong> {agencyInfo.email}
-              <br />
-            </>
-          )}
-          {agencyInfo?.phone && (
-            <>
-              <strong>Phone:</strong> {agencyInfo.phone}
-            </>
+        <div style={{ marginBottom: 16, color: "#555" }}>
+          {agencyId ? (
+            <strong>Agency View</strong>
+          ) : (
+            <strong>Admin View – All Agencies</strong>
           )}
         </div>
-      ) : (
-        <div style={{ marginBottom: 12 }}>
-          <strong>Admin View – All Agencies</strong>
+
+        {/* Tabs */}
+        <div style={{ marginBottom: 20 }}>
+          <button
+            onClick={() => setTab("open")}
+            style={{
+              padding: "8px 14px",
+              marginRight: 8,
+              borderRadius: 6,
+              border: "1px solid #ddd",
+              background: tab === "open" ? "#2563eb" : "#fff",
+              color: tab === "open" ? "#fff" : "#333",
+              cursor: "pointer",
+            }}
+          >
+            Open
+          </button>
+
+          <button
+            onClick={() => setTab("resolved")}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 6,
+              border: "1px solid #ddd",
+              background: tab === "resolved" ? "#2563eb" : "#fff",
+              color: tab === "resolved" ? "#fff" : "#333",
+              cursor: "pointer",
+            }}
+          >
+            Resolved
+          </button>
         </div>
-      )}
 
-      {/* Tabs */}
-      <div style={{ marginBottom: 16 }}>
-        <button onClick={() => setTab("open")}>
-          Open ({agencyScopedCases.filter(c => c.status === "open").length})
-        </button>{" "}
-        <button onClick={() => setTab("resolved")}>
-          Resolved ({agencyScopedCases.filter(c => c.status === "resolved").length})
-        </button>{" "}
-        <button onClick={() => setTab("capped")}>
-          Heater Capped (
-          {agencyScopedCases.filter(c =>
-            c.issue_type?.includes("CAPPED")
-          ).length}
-          )
-        </button>
-      </div>
+        {loading && <p>Loading…</p>}
 
-      {loading && <p>Loading cases…</p>}
-
-      {!loading && visibleCases.length === 0 && (
-        <p>No cases to display.</p>
-      )}
-
-      {!loading && visibleCases.length > 0 && (
-        <table border="1" cellPadding="6" cellSpacing="0" width="100%">
-          <thead>
-            <tr>
-              <th>System</th>
-              <th>Agency</th>
-              <th>Body</th>
-              <th>Issue</th>
-              <th>Status</th>
-              <th>Opened (PST)</th>
-              <th>Resolved (PST)</th>
-              <th>Minutes Open</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleCases.map(c => (
-              <tr
-                key={c.case_id}
-                style={{ cursor: "pointer" }}
-                onClick={() => setSelectedCase(c)}
-              >
-                <td>{c.system_name}</td>
-                <td>{c.agency_name || "—"}</td>
-                <td>{c.body_type}</td>
-                <td>{c.issue_type}</td>
-                <td>{c.status}</td>
-                <td>{formatPST(c.opened_at)}</td>
-                <td>{formatPST(c.resolved_at)}</td>
-                <td>{c.minutes_open ?? "—"}</td>
+        {!loading && (
+          <table
+            width="100%"
+            cellPadding="10"
+            style={{
+              borderCollapse: "collapse",
+              fontSize: 14,
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#f1f5f9", textAlign: "left" }}>
+                <th>System</th>
+                <th>Agency</th>
+                <th>Body</th>
+                <th>Issue</th>
+                <th>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {filteredCases().map(c => (
+                <tr
+                  key={c.case_id}
+                  onClick={() =>
+                    navigate(
+                      `/cases/${c.case_id}${agencyId ? `?agency_id=${agencyId}` : ""}`
+                    )
+                  }
+                  style={{
+                    cursor: "pointer",
+                    borderBottom: "1px solid #eee",
+                  }}
+                  onMouseEnter={e =>
+                    (e.currentTarget.style.background = "#f8fafc")
+                  }
+                  onMouseLeave={e =>
+                    (e.currentTarget.style.background = "transparent")
+                  }
+                >
+                  <td>{c.system_name}</td>
+                  <td>{c.agency_name}</td>
+                  <td>{c.body_type}</td>
+                  <td>{c.issue_type}</td>
+                  <td>
+                    <span
+                      style={{
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        background:
+                          c.status === "open" ? "#fee2e2" : "#dcfce7",
+                        color:
+                          c.status === "open" ? "#991b1b" : "#166534",
+                      }}
+                    >
+                      {c.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
