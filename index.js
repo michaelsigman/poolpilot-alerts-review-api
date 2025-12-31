@@ -35,10 +35,21 @@ app.get("/health", async (req, res) => {
       SELECT COUNT(*) AS case_count
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
     `;
-    const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
-    res.json({ ok: true, case_count: rows[0].case_count });
+
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
+
+    res.json({
+      ok: true,
+      case_count: rows[0].case_count,
+    });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
   }
 });
 
@@ -52,22 +63,37 @@ app.get("/cases", async (req, res) => {
         case_id,
         system_id,
         system_name,
+        agency_id,
         agency_name,
         body_type,
         issue_type,
         status,
         opened_at,
         resolved_at,
+
         TIMESTAMP_DIFF(
           IFNULL(resolved_at, CURRENT_TIMESTAMP()),
           opened_at,
           MINUTE
         ) AS minutes_open
+
       FROM \`poolpilot-analytics.pool_analytics.alert_cases\`
       ORDER BY opened_at DESC
       LIMIT 500
     `;
 
+    const [rows] = await bigquery.query({
+      query,
+      ...QUERY_OPTIONS,
+    });
+
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
 
 /* =====================================================
    Single case detail
@@ -81,11 +107,11 @@ app.get("/cases/:case_id", async (req, res) => {
         case_id,
         system_id,
         system_name,
+        agency_id,
         agency_name,
         body_type,
         issue_type,
         status,
-
         opened_at,
         resolved_at,
 
@@ -112,12 +138,14 @@ app.get("/cases/:case_id", async (req, res) => {
 
     res.json(rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
 /* =====================================================
-   Snapshots for a case (TIMESTAMP SAFE)
+   Snapshots for a case (timestamp-safe)
 ===================================================== */
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
@@ -135,19 +163,16 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
       )
       SELECT
         s.snapshot_ts,
-
         s.air_temp,
         s.pool_temp,
         s.spa_temp,
         s.set_point_pool,
         s.set_point_spa,
-
         s.pool_heater,
         s.spa_heater,
         s.filter_pump,
         s.spa_pump,
         s.service_mode
-
       FROM \`poolpilot-analytics.pool_analytics.pool_snapshots\` s
       JOIN c ON c.system_id = s.system_id
       WHERE s.snapshot_ts BETWEEN c.opened_at AND c.end_ts
@@ -162,7 +187,9 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
