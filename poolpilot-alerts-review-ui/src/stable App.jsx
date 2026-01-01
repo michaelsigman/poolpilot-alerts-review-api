@@ -8,15 +8,6 @@ function getAgencyIdFromUrl() {
   return params.get("agency_id");
 }
 
-function getLatestNote(notes) {
-  if (!Array.isArray(notes) || notes.length === 0) return "—";
-  const last = notes[notes.length - 1];
-  if (!last?.text) return "—";
-  return last.text.length > 80
-    ? last.text.slice(0, 80) + "…"
-    : last.text;
-}
-
 export default function App() {
   const [cases, setCases] = useState([]);
   const [tab, setTab] = useState("open");
@@ -70,7 +61,7 @@ export default function App() {
     >
       <div
         style={{
-          maxWidth: 1200,
+          maxWidth: 1100,
           margin: "0 auto",
           background: "#fff",
           borderRadius: 10,
@@ -138,7 +129,6 @@ export default function App() {
                 <th>Body</th>
                 <th>Issue</th>
                 <th>Status</th>
-                <th>Latest Note</th>
               </tr>
             </thead>
             <tbody>
@@ -147,9 +137,7 @@ export default function App() {
                   key={c.case_id}
                   onClick={() =>
                     navigate(
-                      `/cases/${c.case_id}${
-                        agencyId ? `?agency_id=${agencyId}` : ""
-                      }`
+                      `/cases/${c.case_id}${agencyId ? `?agency_id=${agencyId}` : ""}`
                     )
                   }
                   style={{
@@ -181,9 +169,6 @@ export default function App() {
                     >
                       {c.status}
                     </span>
-                  </td>
-                  <td style={{ color: "#555", fontSize: 13 }}>
-                    {getLatestNote(c.notes)}
                   </td>
                 </tr>
               ))}

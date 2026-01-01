@@ -38,28 +38,30 @@ export default function CaseDetail() {
   const [caseData, setCaseData] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const [noteText, setNoteText] = useState("");
-  const [submittingNote, setSubmittingNote] = useState(false);
   const [resolving, setResolving] = useState(false);
 
-  async function loadCase() {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/cases/${case_id}`);
-      const data = await res.json();
-      setCaseData(data);
-    } catch (e) {
-      console.error("Failed to load case", e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  /* ================================
+     Fetch case metadata
+  ================================ */
   useEffect(() => {
+    async function loadCase() {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/cases/${case_id}`);
+        const data = await res.json();
+        setCaseData(data);
+      } catch (e) {
+        console.error("Failed to load case", e);
+      } finally {
+        setLoading(false);
+      }
+    }
     loadCase();
   }, [case_id]);
 
+  /* ================================
+     Fetch snapshots AFTER case loads
+  ================================ */
   useEffect(() => {
     if (!caseData?.case_id) return;
 
@@ -79,59 +81,25 @@ export default function CaseDetail() {
     loadSnapshots();
   }, [caseData]);
 
-  async function addNote() {
-    if (!noteText.trim()) return;
-
-    setSubmittingNote(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/cases/${caseData.case_id}/notes`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: noteText }),
-        }
-      );
-      const data = await res.json();
-
-      if (data.ok) {
-        setNoteText("");
-        await loadCase();
-      } else {
-        alert("Failed to add note");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Error adding note");
-    } finally {
-      setSubmittingNote(false);
-    }
-  }
-
+  /* ================================
+     Resolve case handler
+  ================================ */
   async function resolveCase() {
-    const reason = window.prompt(
-      "Why are you resolving this case?\n\n(This will be visible to your team.)"
+    const ok = window.confirm(
+      "Mark this case as resolved?\n\nIf the issue persists, a new case will be created automatically."
     );
-
-    if (!reason || reason.trim().length < 5) {
-      alert("Resolution reason required (min 5 characters)");
-      return;
-    }
+    if (!ok) return;
 
     setResolving(true);
     try {
       const res = await fetch(
         `${API_BASE}/cases/${caseData.case_id}/resolve`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ resolved_reason: reason }),
-        }
+        { method: "POST" }
       );
       const data = await res.json();
 
       if (data.ok) {
-        navigate(-1);
+        navigate(-1); // back to dashboard
       } else {
         alert("Failed to resolve case");
       }
@@ -146,7 +114,6 @@ export default function CaseDetail() {
   if (loading) return <div style={{ padding: 20 }}>Loading case…</div>;
   if (!caseData) return <div style={{ padding: 20 }}>Case not found</div>;
 
-  const notes = Array.isArray(caseData.notes) ? caseData.notes : [];
   const isSpa = caseData.body_type === "spa";
   const isPool = caseData.body_type === "pool";
 
@@ -178,52 +145,7 @@ export default function CaseDetail() {
         </button>
       )}
 
-      <h3 style={{ marginTop: 32 }}>Notes</h3>
-
-      {notes.length === 0 && <p>No notes yet.</p>}
-
-      {notes.map(n => (
-        <div
-          key={n.id}
-          style={{
-            padding: 10,
-            marginBottom: 8,
-            borderRadius: 6,
-            background: n.type === "resolution" ? "#ecfdf5" : "#f8fafc",
-            border: "1px solid #e5e7eb",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#555" }}>
-            {n.author} • {formatPST(n.created_at)}
-            {n.type === "resolution" && " ✅"}
-          </div>
-          <div>{n.text}</div>
-        </div>
-      ))}
-
-      <textarea
-        value={noteText}
-        onChange={e => setNoteText(e.target.value)}
-        placeholder="Add a note for the team…"
-        rows={3}
-        style={{ width: "100%", marginTop: 10 }}
-      />
-
-      <button
-        onClick={addNote}
-        disabled={submittingNote}
-        style={{
-          marginTop: 8,
-          padding: "6px 12px",
-          borderRadius: 6,
-          border: "1px solid #ccc",
-          cursor: "pointer",
-        }}
-      >
-        {submittingNote ? "Adding…" : "Add Note"}
-      </button>
-
-      <h3 style={{ marginTop: 32 }}>Snapshots</h3>
+      <h3 style={{ marginTop: 24 }}>Snapshots</h3>
 
       {snapshots.length === 0 && <p>Loading Snapshots...</p>}
 
@@ -233,6 +155,7 @@ export default function CaseDetail() {
             <tr>
               <th>Time</th>
               <th>Air</th>
+
               {isSpa && (
                 <>
                   <th>Spa Temp</th>
@@ -241,6 +164,7 @@ export default function CaseDetail() {
                   <th>Spa Pump</th>
                 </>
               )}
+
               {isPool && (
                 <>
                   <th>Pool Temp</th>
