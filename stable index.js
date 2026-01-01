@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import crypto from "crypto";
 import { BigQuery } from "@google-cloud/bigquery";
 
 dotenv.config();
@@ -26,19 +25,6 @@ const bigquery = new BigQuery({
 const QUERY_OPTIONS = {
   useQueryCache: false,
 };
-
-/* =====================================================
-   Helpers
-===================================================== */
-function makeNote({ text, type = "note", author = "internal" }) {
-  return {
-    id: crypto.randomUUID(),
-    text: text.trim(),
-    author,
-    created_at: new Date().toISOString(),
-    type, // "note" | "resolution"
-  };
-}
 
 /* =====================================================
    Health check
@@ -92,7 +78,7 @@ app.get("/cases", async (req, res) => {
 });
 
 /* =====================================================
-   Single case detail (includes notes + resolved_reason)
+   Single case detail
 ===================================================== */
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
@@ -108,8 +94,6 @@ app.get("/cases/:case_id", async (req, res) => {
         body_type,
         issue_type,
         status,
-        notes,
-        resolved_reason,
         opened_at,
         resolved_at,
         TIMESTAMP_DIFF(
@@ -191,85 +175,24 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 });
 
 /* =====================================================
-   Add a note to a case (append-only)
-===================================================== */
-app.post("/cases/:case_id/notes", async (req, res) => {
-  const { case_id } = req.params;
-  const { text } = req.body;
-
-  if (!text || text.trim().length < 2) {
-    return res.status(400).json({ error: "Note text required" });
-  }
-
-  const note = makeNote({ text });
-
-  try {
-    const query = `
-      UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
-      SET notes = IF(
-        notes IS NULL,
-        TO_JSON([@note]),
-        JSON_ARRAY_APPEND(notes, '$', @note)
-      )
-      WHERE case_id = @case_id
-    `;
-
-    const [job] = await bigquery.createQueryJob({
-      query,
-      params: { case_id, note },
-      ...QUERY_OPTIONS,
-    });
-
-    await job.getQueryResults();
-
-    res.json({ ok: true, note });
-  } catch (err) {
-    console.error("Add note failed", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* =====================================================
-   Resolve a case (manual resolution with reason)
+   Resolve a case (manual resolution)
 ===================================================== */
 app.post("/cases/:case_id/resolve", async (req, res) => {
   const { case_id } = req.params;
-  const { resolved_reason } = req.body;
-
-  if (!resolved_reason || resolved_reason.trim().length < 5) {
-    return res.status(400).json({
-      error: "Resolution reason required (min 5 characters)",
-    });
-  }
-
-  const resolutionNote = makeNote({
-    text: resolved_reason,
-    type: "resolution",
-  });
 
   try {
     const query = `
       UPDATE \`poolpilot-analytics.pool_analytics.alert_cases\`
       SET
         status = 'resolved',
-        resolved_at = CURRENT_TIMESTAMP(),
-        resolved_reason = @resolved_reason,
-        notes = IF(
-          notes IS NULL,
-          TO_JSON([@resolutionNote]),
-          JSON_ARRAY_APPEND(notes, '$', @resolutionNote)
-        )
+        resolved_at = CURRENT_TIMESTAMP()
       WHERE case_id = @case_id
         AND status = 'open'
     `;
 
     const [job] = await bigquery.createQueryJob({
       query,
-      params: {
-        case_id,
-        resolved_reason: resolved_reason.trim(),
-        resolutionNote,
-      },
+      params: { case_id },
       ...QUERY_OPTIONS,
     });
 
