@@ -71,6 +71,7 @@ app.get("/cases", async (req, res) => {
         body_type,
         issue_type,
         status,
+	notes,
         opened_at,
         resolved_at,
         TIMESTAMP_DIFF(
