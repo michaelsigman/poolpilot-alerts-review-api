@@ -41,7 +41,7 @@ export default function CaseDetail() {
   const [resolving, setResolving] = useState(false);
 
   /* ================================
-     1️⃣ Load case metadata
+     Fetch case metadata
   ================================ */
   useEffect(() => {
     async function loadCase() {
@@ -60,7 +60,7 @@ export default function CaseDetail() {
   }, [case_id]);
 
   /* ================================
-     2️⃣ Load snapshots AFTER case loads
+     Fetch snapshots AFTER case loads
   ================================ */
   useEffect(() => {
     if (!caseData?.case_id) return;
@@ -82,25 +82,30 @@ export default function CaseDetail() {
   }, [caseData]);
 
   /* ================================
-     3️⃣ Resolve case (SAFE)
+     Resolve case handler
   ================================ */
   async function resolveCase() {
-    if (!window.confirm("Mark this case as resolved?")) return;
+    const ok = window.confirm(
+      "Mark this case as resolved?\n\nIf the issue persists, a new case will be created automatically."
+    );
+    if (!ok) return;
 
     setResolving(true);
     try {
-      await fetch(
+      const res = await fetch(
         `${API_BASE}/cases/${caseData.case_id}/resolve`,
         { method: "POST" }
       );
+      const data = await res.json();
 
-      // Reload updated case state
-      const res = await fetch(`${API_BASE}/cases/${caseData.case_id}`);
-      const updated = await res.json();
-      setCaseData(updated);
+      if (data.ok) {
+        navigate(-1); // back to dashboard
+      } else {
+        alert("Failed to resolve case");
+      }
     } catch (e) {
-      console.error("Failed to resolve case", e);
-      alert("Failed to resolve case");
+      console.error(e);
+      alert("Error resolving case");
     } finally {
       setResolving(false);
     }
@@ -127,24 +132,22 @@ export default function CaseDetail() {
           onClick={resolveCase}
           disabled={resolving}
           style={{
-            marginTop: 10,
-            marginBottom: 20,
-            background: "#d9534f",
-            color: "white",
+            marginTop: 12,
             padding: "8px 14px",
+            background: "#c0392b",
+            color: "#fff",
             border: "none",
-            borderRadius: 4,
+            borderRadius: 6,
             cursor: "pointer",
-            opacity: resolving ? 0.6 : 1,
           }}
         >
           {resolving ? "Resolving…" : "Resolve Case"}
         </button>
       )}
 
-      <h3>Snapshots</h3>
+      <h3 style={{ marginTop: 24 }}>Snapshots</h3>
 
-      {snapshots.length === 0 && <p>LOADING...</p>}
+      {snapshots.length === 0 && <p>Loading Snapshots...</p>}
 
       {snapshots.length > 0 && (
         <table border="1" cellPadding="6" width="100%">
@@ -174,20 +177,15 @@ export default function CaseDetail() {
           </thead>
           <tbody>
             {snapshots.map((s, i) => {
-              const highlightSpa =
-                isSpa && s.spa_heater === 1 && s.spa_pump === 1;
-
-              const highlightPool =
-                isPool && s.pool_heater === 1 && s.filter_pump === 1;
+              const highlight =
+                (isSpa && s.spa_heater === 1 && s.spa_pump === 1) ||
+                (isPool && s.pool_heater === 1 && s.filter_pump === 1);
 
               return (
                 <tr
                   key={i}
                   style={{
-                    background:
-                      highlightSpa || highlightPool
-                        ? "#fdecea"
-                        : "transparent",
+                    backgroundColor: highlight ? "#fdecea" : "transparent",
                   }}
                 >
                   <td>{formatPST(s.snapshot_ts)}</td>
