@@ -57,7 +57,7 @@ app.get("/health", async (req, res) => {
 });
 
 /* =====================================================
-   ALL cases (single source of truth)
+   ALL cases (dashboard)
 ===================================================== */
 app.get("/cases", async (req, res) => {
   try {
@@ -71,7 +71,7 @@ app.get("/cases", async (req, res) => {
         body_type,
         issue_type,
         status,
-	notes,
+        IFNULL(JSON_QUERY_ARRAY(notes), []) AS notes,
         opened_at,
         resolved_at,
         TIMESTAMP_DIFF(
@@ -87,13 +87,13 @@ app.get("/cases", async (req, res) => {
     const [rows] = await bigquery.query({ query, ...QUERY_OPTIONS });
     res.json(rows);
   } catch (err) {
-    console.error(err);
+    console.error("GET /cases failed", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 /* =====================================================
-   Single case detail (includes notes + resolved_reason)
+   Single case detail
 ===================================================== */
 app.get("/cases/:case_id", async (req, res) => {
   const { case_id } = req.params;
@@ -109,7 +109,7 @@ app.get("/cases/:case_id", async (req, res) => {
         body_type,
         issue_type,
         status,
-        notes,
+        IFNULL(JSON_QUERY_ARRAY(notes), []) AS notes,
         resolved_reason,
         opened_at,
         resolved_at,
@@ -135,13 +135,13 @@ app.get("/cases/:case_id", async (req, res) => {
 
     res.json(rows[0]);
   } catch (err) {
-    console.error(err);
+    console.error("GET /cases/:id failed", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 /* =====================================================
-   Snapshots for a case (FIXED & SAFE)
+   Snapshots for a case
 ===================================================== */
 app.get("/cases/:case_id/snapshots", async (req, res) => {
   const { case_id } = req.params;
@@ -186,13 +186,13 @@ app.get("/cases/:case_id/snapshots", async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    console.error(err);
+    console.error("Snapshots failed", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 /* =====================================================
-   Add a note to a case (append-only)
+   Add a note (append-only)
 ===================================================== */
 app.post("/cases/:case_id/notes", async (req, res) => {
   const { case_id } = req.params;
@@ -213,6 +213,7 @@ app.post("/cases/:case_id/notes", async (req, res) => {
         JSON_ARRAY_APPEND(notes, '$', @note)
       )
       WHERE case_id = @case_id
+        AND status = 'open'
     `;
 
     const [job] = await bigquery.createQueryJob({
@@ -231,7 +232,7 @@ app.post("/cases/:case_id/notes", async (req, res) => {
 });
 
 /* =====================================================
-   Resolve a case (manual resolution with reason)
+   Resolve case (with reason)
 ===================================================== */
 app.post("/cases/:case_id/resolve", async (req, res) => {
   const { case_id } = req.params;
@@ -276,17 +277,10 @@ app.post("/cases/:case_id/resolve", async (req, res) => {
 
     await job.getQueryResults();
 
-    res.json({
-      ok: true,
-      case_id,
-      message: "Case resolved",
-    });
+    res.json({ ok: true, case_id });
   } catch (err) {
     console.error("Resolve case failed", err);
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
